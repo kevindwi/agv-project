@@ -36,7 +36,7 @@ void l_pulse_ISR() {
 }
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
 
   pinMode(RSTART_STOP, OUTPUT);
   pinMode(RRUN_BRAKE, OUTPUT);
@@ -64,45 +64,45 @@ void setup() {
 }
 
 void loop() {
-  static unsigned long last_time = millis();
+  // static unsigned long last_time = millis();
 
-  if (millis() - last_time >= 1000)
-  {
-    motor1(CW, 100, 0);
-    motor2(CCW, 100, 0);
+  // if (millis() - last_time >= 1000)
+  // {
+  //   motor1(CW, 100, 0);
+  //   motor2(CCW, 100, 0);
 
-    noInterrupts();
-    unsigned long r_pulses = r_pulse_count;
-    unsigned long l_pulses = l_pulse_count;
+  //   noInterrupts();
+  //   unsigned long r_pulses = r_pulse_count;
+  //   unsigned long l_pulses = l_pulse_count;
 
-    r_pulse_count = 0;
-    l_pulse_count = 0;
-    interrupts();
+  //   r_pulse_count = 0;
+  //   l_pulse_count = 0;
+  //   interrupts();
 
-    float r_frequency = r_pulses;
-    float r_rpm = r_frequency * 2.0;
+  //   float r_frequency = r_pulses;
+  //   float r_rpm = r_frequency * 2.0;
 
-    float l_frequency = l_pulses;
-    float l_rpm = l_frequency * 2.0;
+  //   float l_frequency = l_pulses;
+  //   float l_rpm = l_frequency * 2.0;
 
-    Serial.print("Right RPM = ");
-    Serial.println(r_rpm);
+  //   Serial.print("Right RPM = ");
+  //   Serial.println(r_rpm/15);
 
-    Serial.print("Left RPM = ");
-    Serial.println(l_rpm);
+  //   Serial.print("Left RPM = ");
+  //   Serial.println(l_rpm/15);
 
-    last_time = millis();
-  }
+  //   last_time = millis();
+  // }
   
-  // motor1(CW, 100, 0);
-  // motor2(CCW, 100, 0);
+  motor1(CW, 100, 0);
+  motor2(CCW, 100, 0);
 
-  // delay(3000);
+  delay(3000);
 
-  // motor1(CCW, 100, 0);
-  // motor2(CW, 100, 0);
+  motor1(CCW, 100, 0);
+  motor2(CW, 100, 0);
 
-  // delay(3000);
+  delay(3000);
 }
 
 void motor1(bool dir, int pwme, int brake)
