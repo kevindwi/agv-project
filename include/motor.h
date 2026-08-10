@@ -3,26 +3,22 @@
 
 class Motor
 {
-private:
+public:
     uint8_t _pinStartStop;
     uint8_t _pinRunBrake;
     uint8_t _pinDir;
-    uint8_t _pinNtVr;
+    uint8_t _pinIntVr;
     uint8_t _pinPwm;
     uint8_t _pinSpeed;
-    bool _direction;
     volatile unsigned long _pulseCount;
 
-public:
-    Motor();
+    static Motor *_instances[2];
 
-    void begin(uint8_t pinStartStop, uint8_t pinRunBrake, uint8_t pinDir, uint8_t pinNtVr, uint8_t pinPwm, uint8_t pinSpeed);
+    Motor(uint8_t pinStartStop, uint8_t pinRunBrake, uint8_t pinDir, uint8_t pinIntVr,
+          uint8_t pinPwm, uint8_t pinSpeed);
 
-    void setSpeed(int pwm);
-
-    void setDirection(bool dir);
-
+    void begin();
+    void set(bool dir, int pwm);
     void stop();
-
     unsigned long getAndResetPulses();
 };
