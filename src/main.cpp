@@ -99,7 +99,7 @@ void setup()
 void loop()
 {
   // --- 1. E-Stop Check ---
-  if (digitalRead(E_STOP_BTN_PIN) == LOW)
+  if (digitalRead(E_STOP_BTN_PIN) == HIGH)
   {
     if (!eStopActive) {
       eStopActive = true;
@@ -143,8 +143,18 @@ void loop()
     if (startReading != currentStartState) {
       currentStartState = startReading;
       if (currentStartState == LOW) {
+        // START
         if (currentState == AgvState::IDLE) {
           changeState(AgvState::MOVING_FORWARD);
+        }
+        // STOP
+        else if (currentState == AgvState::MOVING_FORWARD ||
+                  currentState == AgvState::MOVING_ROTATE ||
+                  currentState == AgvState::LOADING ||
+                  currentState == AgvState::UNLOADING ||
+                  currentState == AgvState::OBSTACLE) {
+
+          changeState(AgvState::IDLE);
         }
       }
     }
@@ -175,8 +185,8 @@ void loop()
       break;
 
     case AgvState::MOVING_FORWARD:
-      motorRight.set(DIR_CW, 20);
-      motorLeft.set(DIR_CCW, 20);
+      motorRight.set(DIR_CW, 50);
+      motorLeft.set(DIR_CCW, 50);
       // CATATAN: Di sini nanti tambahkan logika: if (sensorGarisBelok) changeState(MOVING_ROTATE);
       break;
 
