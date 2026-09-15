@@ -13,8 +13,8 @@
 
 enum class AgvState {
   IDLE,
-  MOVING_FORWARD,  // Sub-state dari Moving
-  MOVING_ROTATE,   // Sub-state dari Moving
+  MOVING_FORWARD,
+  MOVING_ROTATE,
   LOADING,
   UNLOADING,
   OBSTACLE,
@@ -185,16 +185,13 @@ void loop()
       break;
 
     case AgvState::MOVING_FORWARD:
-      motorRight.set(DIR_CW, 50);
-      motorLeft.set(DIR_CCW, 50);
-      // CATATAN: Di sini nanti tambahkan logika: if (sensorGarisBelok) changeState(MOVING_ROTATE);
+      motorRight.set(DIR_CCW, 100);
+      motorLeft.set(DIR_CW, 100);
       break;
 
     case AgvState::MOVING_ROTATE:
-      // Contoh: Putar di tempat
       motorRight.set(DIR_CW, 15);
       motorLeft.set(DIR_CW, 15);
-      // CATATAN: Nanti tambahkan: if (imuAngleReached) changeState(MOVING_FORWARD);
       break;
 
     case AgvState::LOADING:
@@ -223,7 +220,7 @@ void loop()
       // Obstacle --> Moving (Cleared) ATAU Obstacle --> Error (Timeout)
       if (currentTime - stateStartTime >= OBSTACLE_TIMEOUT_MS) {
         Serial.println("Obstacle timeout! Path blocked.");
-        changeState(AgvState::ERROR); // UML: Obstacle --> Error
+        changeState(AgvState::ERROR); // Obstacle --> Error
       }
       break;
 

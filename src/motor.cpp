@@ -48,7 +48,9 @@ void Motor::begin()
     digitalWrite(_pinStartStop, LOW);
     digitalWrite(_pinRunBrake, HIGH);
     digitalWrite(_pinDir, DIR_CW);
-    digitalWrite(_pinIntVr, HIGH);
+
+    // LOW: external DC voltage is enabled.
+    digitalWrite(_pinIntVr, LOW); // ERROR: Tidak berpengaruh (kabel I/O dijumper)
 
     int8_t intNum = digitalPinToInterrupt(_pinSpeed);
     if (intNum == NOT_AN_INTERRUPT)
