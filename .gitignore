@@ -1,0 +1,30 @@
+# ============================================================
+#  AGV Project - root .gitignore
+#  (hanya untuk hal-hal level repo; tiap subproject punya
+#   .gitignore sendiri yang tetap berlaku)
+# ============================================================
+
+# --- Firmware (PlatformIO) ---
+firmware/.pio/
+firmware/.cache/
+firmware/compile_commands.json
+firmware/.vscode/.browse.c_cpp.db*
+firmware/.vscode/c_cpp_properties.json
+firmware/.vscode/launch.json
+firmware/.vscode/ipch/
+
+# --- ROS 2 workspace (colcon) ---
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# --- Editor / OS ---
+.DS_Store
+Thumbs.db
+*.swp
+*~
