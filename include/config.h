@@ -1,11 +1,14 @@
 #pragma once
 
+#define SERIAL_DEBUG Serial
+#define SERIAL_COMM Serial1
+
 // PIN MOTOR KANAN
 #define R_START_STOP 22
 #define R_RUN_BRAKE 23
 #define R_DIR 24
 #define R_INT_VR 25
-#define R_PWM 9 // VRM
+#define R_PWM 9       // VRM
 #define R_SPEED_OUT 3 // Encoder output (interrupt)
 #define R_ALARM_RESET 26
 
