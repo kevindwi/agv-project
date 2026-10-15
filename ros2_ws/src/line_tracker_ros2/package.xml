@@ -3,7 +3,7 @@
 <package format="3">
   <name>line_tracker_ros2</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Node ROS 2 line tracking: kamera - PID - serial ke firmware AGV</description>
   <maintainer email="karlindokusuma@todo.todo">karlindokusuma</maintainer>
   <license>TODO: License declaration</license>
 

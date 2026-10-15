@@ -59,12 +59,13 @@ void FSM::handleSerial() {
 
     if (rc == '\n') {
       buf[idx] = '\0';
+      // Kontrak frame: "<left_pwm>,<right_pwm>\n" (lihat docs/serial_protocol.md)
       char *token = strtok(buf, ",");
       if (token != NULL)
-        rightSpeed = atoi(token);
+        leftSpeed = atoi(token);
       token = strtok(NULL, ",");
       if (token != NULL)
-        leftSpeed = atoi(token);
+        rightSpeed = atoi(token);
 
       idx = 0;
 

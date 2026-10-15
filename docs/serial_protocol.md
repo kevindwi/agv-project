@@ -26,35 +26,26 @@ Setiap perubahan format data **wajib** diperbarui di sini agar kedua sisi tetap 
 
 ## 3. Semantik field
 
+Urutan kanonik: **kiri, kanan**.
+
 | Field | Dikirim ROS 2 | Dibaca firmware |
 | --- | --- | --- |
-| token ke-1 | `pwm_kiri` (roda kiri) | `rightSpeed` (roda kanan) |
-| token ke-2 | `pwm_kanan` (roda kanan) | `leftSpeed` (roda kiri) |
-
-> **⚠️ Inkonsistensi (BUG) — perlu diputuskan.**
-> Node ROS 2 (`line_tracker_node.py`) mengirim `f"{pwm_kiri},{pwm_kanan}\n"`, sedangkan firmware
-> (`fsm.cpp::handleSerial`) memakai token pertama sebagai `rightSpeed`.
-> Artinya **nilai PWM roda kiri dan kanan tertukar** di sisi firmware.
->
-> Pilihan perbaikan (pilih salah satu, lalu samakan dokumen ini):
-> 1. Ubah ROS agar mengirim `f"{pwm_kanan},{pwm_kiri}\n"`, **atau**
-> 2. Ubah firmware: token pertama → `leftSpeed`, token kedua → `rightSpeed`.
->
-> Rekomendasi: jadikan urutan kanonik **`kiri,kanan`** (ikuti sisi ROS) dan perbaiki firmware.
+| token ke-1 | `left_pwm` (roda kiri) | `leftSpeed` (roda kiri) |
+| token ke-2 | `right_pwm` (roda kanan) | `rightSpeed` (roda kanan) |
 
 ## 4. Detail implementasi
 
-### Pengirim — `ros2_ws/src/line_tracker_ros2/line_tracker_ros2/line_tracker_node.py`
+### Pengirim — `ros2_ws/src/line_tracker_ros2/line_tracker_ros2/serial_bridge.py`
 
 - Membuka port: `serial.Serial(port, baud, timeout=1)`, lalu `time.sleep(2)` agar MCU stabil.
 - Nilai PWM di-clamp ke `0..255` sebelum dikirim: `max(0, min(255, int(round(pwm))))`.
-- Kirim: `self.ser.write(f"{pwm_kiri},{pwm_kanan}\n".encode("utf-8"))`.
+- Kirim: `f"{left_pwm},{right_pwm}\n".encode("utf-8")`.
 
-### Penerima — `firmware/src/fsm.cpp::handleSerial()`
+### Penerima — `firmware/src/app/fsm.cpp::handleSerial()`
 
 - Buffer: `static char buf[16]` (maksimum **15 karakter** sebelum `\n`).
 - Menumpuk karakter sampai `\n`; `\r` dibuang.
-- Parsing: `strtok(buf, ",")` → token 1 ke `rightSpeed`, token 2 ke `leftSpeed` (via `atoi`).
+- Parsing: `strtok(buf, ",")` → token 1 ke `leftSpeed`, token 2 ke `rightSpeed` (via `atoi`).
 - Setelah itu baris debug dicetak ke Serial USB: `R: <rightSpeed> | L: <leftSpeed>`.
 
 ## 5. Batasan & catatan
@@ -72,5 +63,5 @@ Setiap perubahan format data **wajib** diperbarui di sini agar kedua sisi tetap 
 ```
 ROS 2  --("120,100\n")-->  Firmware
        kiri=120, kanan=100
-Firmware (setelah perbaikan): leftSpeed=120, rightSpeed=100
+Firmware: leftSpeed=120, rightSpeed=100
 ```

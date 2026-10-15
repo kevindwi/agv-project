@@ -1,0 +1,14 @@
+line_tracker_node:
+  ros__parameters:
+    camera_index: 2          # index perangkat V4L2
+    serial_port: /dev/ttyUSB0
+    baud_rate: 115200
+
+    # PID line tracking (error ternormalisasi)
+    kp: 5.0
+    ki: 0.0
+    kd: 0.0
+
+    base_speed: 25           # PWM acuan jalan lurus (0-255)
+    publish_rate_hz: 30.0    # frekuensi loop (setara FPS kamera)
+    show_debug_window: true  # tampilkan window OpenCV

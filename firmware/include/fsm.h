@@ -10,7 +10,6 @@ public:
   void begin();
   void update();
   void handleSerial();
-  void handlePID();
   void changeState(AgvState newState);
 
   AgvState state() const;
