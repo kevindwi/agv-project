@@ -22,4 +22,6 @@ private:
   Motor &_left;
   AgvState _state;
   unsigned long _stateStartTime;
+  int _rightSpeed;
+  int _leftSpeed;
 };

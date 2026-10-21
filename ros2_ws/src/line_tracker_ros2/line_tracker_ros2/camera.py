@@ -83,9 +83,7 @@ class LineDetector:
         normalized_error = error_pixels / image_center
 
         centroid_y = roi_top + int((roi_bottom - roi_top) / 2)
-        cv2.circle(
-            debug_image, (center_x + roi_left, centroid_y), 5, (100, 0, 255), -1
-        )
+        cv2.circle(debug_image, (center_x + roi_left, centroid_y), 5, (100, 0, 255), -1)
 
         return LineDetection(
             found=True, normalized_error=normalized_error, debug_image=debug_image

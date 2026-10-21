@@ -2,11 +2,9 @@
 #include "Arduino.h"
 #include "config.h"
 
-int rightSpeed = 0;
-int leftSpeed = 0;
-
 FSM::FSM(Motor &right, Motor &left)
-    : _right(right), _left(left), _state(AgvState::IDLE), _stateStartTime(0) {}
+    : _right(right), _left(left), _state(AgvState::IDLE), _stateStartTime(0),
+      _rightSpeed(0), _leftSpeed(0) {}
 
 void FSM::begin() { changeState(AgvState::IDLE); }
 
@@ -59,20 +57,20 @@ void FSM::handleSerial() {
 
     if (rc == '\n') {
       buf[idx] = '\0';
-      // Kontrak frame: "<left_pwm>,<right_pwm>\n" (lihat docs/serial_protocol.md)
+      // Kontrak frame: "<left_pwm>,<right_pwm>\n"
       char *token = strtok(buf, ",");
       if (token != NULL)
-        leftSpeed = atoi(token);
+        _leftSpeed = atoi(token);
       token = strtok(NULL, ",");
       if (token != NULL)
-        rightSpeed = atoi(token);
+        _rightSpeed = atoi(token);
 
       idx = 0;
 
       Serial.print("R: ");
-      Serial.print(rightSpeed);
+      Serial.print(_rightSpeed);
       Serial.print(" | L: ");
-      Serial.println(leftSpeed);
+      Serial.println(_leftSpeed);
       // ------------------------------------------
     } else if (rc != '\r' && idx < sizeof(buf) - 1) {
       buf[idx++] = rc;
@@ -87,8 +85,8 @@ void FSM::update() {
     break;
 
   case AgvState::MOVING: {
-    _right.set(DIR_CW, rightSpeed);
-    _left.set(DIR_CCW, leftSpeed);
+    _right.set(DIR_CW, _rightSpeed);
+    _left.set(DIR_CCW, _leftSpeed);
     break;
   }
 
