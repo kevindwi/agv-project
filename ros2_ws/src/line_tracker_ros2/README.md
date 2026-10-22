@@ -14,7 +14,7 @@ line_tracker_ros2/
 │   ├── pid.py                 # PIDController
 │   └── serial_bridge.py       # kirim PWM ke firmware
 ├── config/
-│   └── line_tracker.yaml      # kp/ki/kd/base_speed/port
+│   └── line_tracker.yaml      # PID, parameter DDMR, dan port
 ├── launch/
 │   └── line_tracker.launch.py
 ├── resource/                  # ament index
@@ -31,10 +31,12 @@ line_tracker_ros2/
 | `camera_index` | `2` | index perangkat kamera V4L2 |
 | `serial_port` | `/dev/ttyUSB0` | port ke firmware |
 | `baud_rate` | `115200` | baud serial |
-| `kp`, `ki`, `kd` | `5.0, 0.0, 0.0` | gain PID |
-| `base_speed` | `25` | PWM acuan (0–255) |
+| `kp`, `ki`, `kd` | `1.0, 0.0, 0.0` | gain PID; tuning memengaruhi `angular.z` (rad/s) |
+| `linear_speed_mps` | `0.15` | kecepatan maju robot (m/s) |
+| `wheel_separation_m` | `0.30` | jarak antara pusat roda kiri dan kanan (m), ukur pada robot |
+| `max_angular_speed_radps` | `1.0` | batas kecepatan putar robot (rad/s) |
+| `max_wheel_speed_mps` | `0.30` | skala perkiraan untuk memetakan kecepatan roda ke PWM |
 | `publish_rate_hz` | `30.0` | frekuensi loop |
-| `show_debug_window` | `true` | window OpenCV debug |
 
 ## Topik
 
@@ -43,7 +45,16 @@ line_tracker_ros2/
 | `/line_tracker/debug_image` | `sensor_msgs/Image` | frame debug (untuk `rqt_image_view`) |
 | `/line_tracker/normalized_error` | `std_msgs/Float64` | error posisi garis ternormalisasi |
 | `/motor_pwm` | `std_msgs/Int32MultiArray` | `[left_pwm, right_pwm]` |
-| `/cmd_vel` | `geometry_msgs/Twist` | kecepatan robot (skala saat ini) |
+| `/line_tracker/wheel_speeds` | `std_msgs/Float64MultiArray` | target kinematika `[v_left, v_right]` dalam m/s |
+| `/cmd_vel` | `geometry_msgs/Twist` | kecepatan robot: m/s dan rad/s |
+
+Gambar kamera debug (frame dengan overlay ROI dan posisi garis) diterbitkan pada
+`/line_tracker/debug_image`. Lihat dengan `rqt_image_view` dan pilih topik itu.
+
+PID mengubah error garis menjadi kecepatan putar `angular.z`. Kinematika balik
+DDMR menghitung kecepatan roda dari `linear.x` dan `angular.z`. Firmware saat
+ini tetap menerima PWM positif, sehingga pemetaan ke PWM masih berupa skala
+perkiraan; target kecepatan encoder dan gerak roda mundur belum diterapkan.
 
 ## Build & jalankan
 

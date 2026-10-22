@@ -89,17 +89,7 @@ class LineDetector:
             found=True, normalized_error=normalized_error, debug_image=debug_image
         )
 
-    def show_debug(self, debug_image) -> int:
-        """Tampilkan window debug OpenCV. Return keycode tombol yang ditekan."""
-        cv2.imshow("Line Detection Debug", debug_image)
-        return cv2.waitKey(1) & 0xFF
-
     def release(self) -> None:
         """Lepas kamera."""
         if self.capture is not None and self.capture.isOpened():
             self.capture.release()
-
-
-def close_debug_windows() -> None:
-    """Tutup semua window OpenCV."""
-    cv2.destroyAllWindows()

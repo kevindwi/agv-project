@@ -1,4 +1,4 @@
-"""Kontroler PID untuk line tracking."""
+"""Kontroler PID line tracking; gain menentukan satuan output kontrol."""
 
 
 class PIDController:
@@ -14,6 +14,11 @@ class PIDController:
         self.integral = 0.0
 
     def compute(self, error: float, dt: float) -> float:
+        """Hitung koreksi dari error ternormalisasi dan selang waktu (detik).
+
+        Pada line tracker, gain PID harus dituning agar output dapat dipakai
+        sebagai kecepatan sudut robot dalam rad/s.
+        """
         if dt <= 0:
             return 0.0
 

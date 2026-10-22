@@ -2,17 +2,31 @@ import sys
 import time
 
 import rclpy
+from cv_bridge import CvBridge
 from geometry_msgs.msg import Twist
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from std_msgs.msg import Int32MultiArray
+from sensor_msgs.msg import Image
+from std_msgs.msg import Float64MultiArray, Int32MultiArray
 
-from .camera import LineDetector, close_debug_windows
+from .camera import LineDetector
 from .pid import PIDController
 from .serial_bridge import SerialBridge
 
 PWM_MIN = 0
 PWM_MAX = 255
+
+
+def differential_drive_wheel_speeds(
+    linear_speed: float, angular_speed: float, wheel_separation: float
+) -> tuple[float, float]:
+    """Hitung kecepatan linear roda kiri dan kanan (m/s)."""
+    half_turn_speed = wheel_separation * angular_speed / 2.0
+
+    left_speed = linear_speed - half_turn_speed
+    right_speed = linear_speed + half_turn_speed
+
+    return left_speed, right_speed
 
 
 def clamp_pwm(value: float) -> int:
@@ -30,19 +44,23 @@ class LineTrackerNode(Node):
         self.declare_parameter("serial_port", "/dev/ttyUSB0")
         self.declare_parameter("baud_rate", 115200)
 
-        self.declare_parameter("kp", 5.0)
+        self.declare_parameter("kp", 1.0)
         self.declare_parameter("ki", 0.0)
-        self.declare_parameter("kd", 4.0)
+        self.declare_parameter("kd", 0.0)
 
-        self.declare_parameter("base_speed", 25)
+        # Perintah gerak memakai satuan SI. Nilai wheel_separation harus
+        # disesuaikan dengan jarak roda fisik robot.
+        self.declare_parameter("linear_speed_mps", 0.15)
+        self.declare_parameter("wheel_separation_m", 0.30)
+        self.declare_parameter("max_angular_speed_radps", 1.0)
+        # Skala PWM perkiraan; ganti dengan kalibrasi/closed-loop encoder nanti.
+        self.declare_parameter("max_wheel_speed_mps", 0.30)
         self.declare_parameter("publish_rate_hz", 30.0)
-        self.declare_parameter("show_debug_window", True)
 
         camera_index = self.get_parameter("camera_index").value
         serial_port = self.get_parameter("serial_port").value
         baud_rate = self.get_parameter("baud_rate").value
         publish_rate_hz = self.get_parameter("publish_rate_hz").value
-        self.show_debug_window = self.get_parameter("show_debug_window").value
 
         # Kamera & deteksi garis
         self.line_detector = LineDetector(camera_index)
@@ -68,10 +86,17 @@ class LineTrackerNode(Node):
         self.last_time = time.time()
 
         # Publisher
+        self.bridge = CvBridge()
+        self.debug_image_publisher = self.create_publisher(
+            Image, "/line_tracker/debug_image", 10
+        )
         self.motor_pwm_publisher = self.create_publisher(
             Int32MultiArray, "/motor_pwm", 10
         )
         self.cmd_vel_publisher = self.create_publisher(Twist, "/cmd_vel", 10)
+        self.wheel_speed_publisher = self.create_publisher(
+            Float64MultiArray, "/line_tracker/wheel_speeds", 10
+        )
 
         # Timer
         self.timer = self.create_timer(1.0 / publish_rate_hz, self.timer_callback)
@@ -87,11 +112,11 @@ class LineTrackerNode(Node):
             return
 
         detection = self.line_detector.detect(frame)
+        self._publish_debug_image(detection.debug_image)
 
         # Tidak ada garis -> hentikan motor, jangan exit node
         if not detection.found:
             self._stop_motors()
-            self._handle_debug_window(detection.debug_image)
             return
 
         now = time.time()
@@ -102,63 +127,97 @@ class LineTrackerNode(Node):
         self.pid.kp = self.get_parameter("kp").value
         self.pid.ki = self.get_parameter("ki").value
         self.pid.kd = self.get_parameter("kd").value
-        base_speed = self.get_parameter("base_speed").value
 
-        pid_output = self.pid.compute(detection.normalized_error, dt)
+        linear_speed = float(self.get_parameter("linear_speed_mps").value)
+        wheel_separation = float(self.get_parameter("wheel_separation_m").value)
+        max_angular_speed = abs(
+            float(self.get_parameter("max_angular_speed_radps").value)
+        )
+        max_wheel_speed = float(self.get_parameter("max_wheel_speed_mps").value)
+        if wheel_separation <= 0.0 or max_wheel_speed <= 0.0:
+            self.get_logger().error(
+                "wheel_separation_m dan max_wheel_speed_mps harus lebih besar dari 0"
+            )
+            self._stop_motors()
+            return
+        if linear_speed < 0.0:
+            self.get_logger().error(
+                "linear_speed_mps tidak boleh negatif pada mode maju"
+            )
+            self._stop_motors()
+            return
 
-        left_pwm = clamp_pwm(base_speed + pid_output)
-        right_pwm = clamp_pwm(base_speed - pid_output)
+        # PID mengubah error posisi garis menjadi kecepatan putar robot.
+        # Error positif berarti garis ada di kanan gambar, jadi robot perlu
+        # berbelok ke kanan (omega negatif pada konvensi ROS).
+        angular_speed = -self.pid.compute(detection.normalized_error, dt)
+        angular_speed = max(-max_angular_speed, min(max_angular_speed, angular_speed))
 
-        print(f"pwm_kiri: {left_pwm}, pwm_kanan: {right_pwm}\n")
+        # Kinematika balik DDMR: (v, omega) -> kecepatan roda kiri/kanan.
+        left_speed, right_speed = differential_drive_wheel_speeds(
+            linear_speed, angular_speed, wheel_separation
+        )
 
-        # 1. Topik PWM roda [kiri, kanan]
+        # Firmware saat ini menerima PWM maju 0..255, bukan target kecepatan
+        # bertanda. Pemetaan ini hanya skala perkiraan, bukan kontrol kecepatan.
+        left_pwm = clamp_pwm(max(0.0, left_speed) / max_wheel_speed * PWM_MAX)
+        right_pwm = clamp_pwm(max(0.0, right_speed) / max_wheel_speed * PWM_MAX)
+
+        self.get_logger().debug(
+            f"v={linear_speed:.3f} m/s, omega={angular_speed:.3f} rad/s; "
+            f"vL={left_speed:.3f}, vR={right_speed:.3f} m/s; "
+            f"PWM L={left_pwm}, R={right_pwm}"
+        )
+
+        # Topik PWM roda [kiri, kanan]
         pwm_message = Int32MultiArray()
         pwm_message.data = [left_pwm, right_pwm]
         self.motor_pwm_publisher.publish(pwm_message)
 
-        # 2. Topik kecepatan standar ROS 2
+        wheel_speed_message = Float64MultiArray()
+        wheel_speed_message.data = [left_speed, right_speed]
+        self.wheel_speed_publisher.publish(wheel_speed_message)
+
+        # Topik kecepatan standar ROS 2
         twist_message = Twist()
-        twist_message.linear.x = float(base_speed) / float(PWM_MAX)
-        twist_message.angular.z = -float(pid_output) / 100.0
+        twist_message.linear.x = linear_speed
+        twist_message.angular.z = angular_speed
         self.cmd_vel_publisher.publish(twist_message)
 
-        # 3. Kirim ke firmware: "<left_pwm>,<right_pwm>\n"
+        # Kirim ke firmware: "<left_pwm>,<right_pwm>\n"
         try:
             self.serial_bridge.send_pwm(left_pwm, right_pwm)
         except OSError as error:
             self.get_logger().warn(f"Gagal mengirim data serial: {error}")
 
-        self._handle_debug_window(detection.debug_image)
-
     # ------------------------------------------------------------------ #
     # Helper
     # ------------------------------------------------------------------ #
+    def _publish_debug_image(self, image):
+        """Publish frame dengan overlay ROI dan posisi garis."""
+        try:
+            message = self.bridge.cv2_to_imgmsg(image, encoding="bgr8")
+            self.debug_image_publisher.publish(message)
+        except Exception as error:  # noqa: BLE001 - kegagalan visualisasi tak hentikan kontrol
+            self.get_logger().error(f"Gagal publish debug image: {error}")
+
     def _stop_motors(self):
         """Hentikan motor (topik + firmware)."""
         pwm_message = Int32MultiArray()
         pwm_message.data = [0, 0]
         self.motor_pwm_publisher.publish(pwm_message)
         self.cmd_vel_publisher.publish(Twist())
+        self.wheel_speed_publisher.publish(Float64MultiArray())
         try:
             self.serial_bridge.send_pwm(0, 0)
         except OSError:
             pass
-
-    def _handle_debug_window(self, debug_image):
-        if not self.show_debug_window:
-            return
-        key = self.line_detector.show_debug(debug_image)
-        if key == ord("q"):
-            self.get_logger().info("Tombol 'q' ditekan. Mematikan node...")
-            self._stop_motors()
-            rclpy.shutdown()
 
     def destroy_node(self):
         self.get_logger().info("Melepas kamera & serial...")
         self._stop_motors()
         self.line_detector.release()
         self.serial_bridge.close()
-        close_debug_windows()
         super().destroy_node()
 
 

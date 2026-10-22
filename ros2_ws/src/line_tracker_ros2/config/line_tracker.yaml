@@ -5,10 +5,12 @@ line_tracker_node:
     baud_rate: 115200
 
     # PID line tracking (error ternormalisasi)
-    kp: 5.0
+    kp: 1.0
     ki: 0.0
     kd: 0.0
 
-    base_speed: 25           # PWM acuan jalan lurus (0-255)
+    linear_speed_mps: 0.15               # kecepatan maju robot (m/s)
+    wheel_separation_m: 0.30             # jarak tengah roda kiri-kanan (ukur robot)
+    max_angular_speed_radps: 1.0          # batas kecepatan putar robot
+    max_wheel_speed_mps: 0.30             # skala perkiraan untuk konversi ke PWM
     publish_rate_hz: 30.0    # frekuensi loop (setara FPS kamera)
-    show_debug_window: true  # tampilkan window OpenCV
