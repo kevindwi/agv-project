@@ -18,10 +18,13 @@ public:
 
 private:
   void stopMotors();
+  bool commandTimedOut() const;
   Motor &_right;
   Motor &_left;
   AgvState _state;
   unsigned long _stateStartTime;
+  unsigned long _lastCommandTime;
   int _rightSpeed;
   int _leftSpeed;
+  bool _commandTimedOut;
 };

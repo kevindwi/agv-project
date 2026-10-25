@@ -56,7 +56,11 @@ Urutan kanonik: **kiri, kanan**.
   output `Serial` hanya untuk debug manusia (`RPM: ...`).
 - **Panjang frame.** Karena buffer firmware 16 byte, frame harus ≤ 15 karakter.
   `255,255` (7 karakter) aman, tetapi jangan menambah spasi/field tanpa memperbesar buffer.
-- **Timeout.** Karena tak ada handshake, `time.sleep(2)` di sisi ROS adalah kompensasi sementara.
+- **Command timeout (failsafe).** Bila firmware tidak menerima frame **valid** selama
+  `SERIAL_COMMAND_TIMEOUT_MS` (default **500 ms**), motor otomatis berhenti walau state
+  masih `MOVING`. Motor kembali bergerak setelah frame valid berikutnya diterima.
+  Frame dianggap valid bila memiliki **dua** field (`<left_pwm>,<right_pwm>`).
+- **Timeout koneksi.** `time.sleep(2)` di sisi ROS hanyalah jeda agar MCU selesai reset saat port dibuka.
 
 ## 6. Contoh urutan
 

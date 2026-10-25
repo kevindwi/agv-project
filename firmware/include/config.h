@@ -45,3 +45,7 @@
 // PWM TASK
 #define MOVING_PWM 20
 #define ROTATE_PWM 15
+
+// TIMEOUT PERINTAH SERIAL
+// Motor berhenti bila tidak ada frame valid selama >= nilai ini.
+#define SERIAL_COMMAND_TIMEOUT_MS 500
