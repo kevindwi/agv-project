@@ -2,15 +2,12 @@
 #include "config.h"
 
 SpeedMonitor::SpeedMonitor(Motor &right, Motor &left)
-    : _right(right),
-      _left(left),
-      _lastReadTime(0)
-{
-}
+    : _right(right), _left(left), _lastReadTime(0) {}
 
 void SpeedMonitor::update() {
   unsigned long now = millis();
-  if (now - _lastReadTime < SPEED_READ_INTERVAL_MS) return;
+  if (now - _lastReadTime < SPEED_READ_INTERVAL_MS)
+    return;
   _lastReadTime = now;
 
   unsigned long rPulses = _right.getAndResetPulses();
@@ -20,6 +17,8 @@ void SpeedMonitor::update() {
   float rRpm = (rPulses / intervalSec / PULSES_PER_REV) * 60.0f;
   float lRpm = (lPulses / intervalSec / PULSES_PER_REV) * 60.0f;
 
-  Serial.print("R RPM: "); Serial.print(rRpm / 15.0f);
-  Serial.print("  |  L RPM: "); Serial.println(lRpm / 15.0f);
+  Serial.print("R RPM: ");
+  Serial.print(rRpm / 30.0f);
+  Serial.print("  |  L RPM: ");
+  Serial.println(lRpm / 30.0f);
 }

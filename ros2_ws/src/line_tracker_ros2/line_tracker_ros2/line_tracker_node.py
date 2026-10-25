@@ -39,7 +39,7 @@ class LineTrackerNode(Node):
         super().__init__("line_tracker_node")
 
         # Parameter
-        self.declare_parameter("camera_index", 0)
+        self.declare_parameter("camera_index", 3)
 
         self.declare_parameter("serial_port", "/dev/ttyUSB0")
         self.declare_parameter("baud_rate", 115200)
@@ -50,8 +50,8 @@ class LineTrackerNode(Node):
 
         # Perintah gerak memakai satuan SI. Nilai wheel_separation harus
         # disesuaikan dengan jarak roda fisik robot.
-        self.declare_parameter("linear_speed_mps", 0.15)
-        self.declare_parameter("wheel_separation_m", 0.30)
+        self.declare_parameter("linear_speed_mps", 0.024)
+        self.declare_parameter("wheel_separation_m", 0.48)
         self.declare_parameter("max_angular_speed_radps", 1.0)
         # Skala PWM perkiraan; ganti dengan kalibrasi/closed-loop encoder nanti.
         self.declare_parameter("max_wheel_speed_mps", 0.30)

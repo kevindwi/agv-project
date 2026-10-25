@@ -2,22 +2,24 @@
 
 Dokumen ini merinci tahapan lanjutan untuk mencapai tiga tujuan proyek:
 
-1. Navigasi berbasis waypoint.
-2. Path tracking, termasuk identifikasi intersection dengan marker ArUco.
-3. Integrasi IoT untuk telemetry dan command.
+1. Navigasi berbasis waypoint pada lintasan terpandu (line-guided).
+2. Line tracking dengan identifikasi intersection menggunakan marker ArUco.
+3. Integrasi IoT untuk telemetry dan command tingkat misi.
 
 ## Kondisi proyek saat ini
 
 - Kamera dan deteksi garis sudah ada di node ROS 2.
 - PID menghasilkan perintah gerak dan kinematika balik DDMR menghitung target
   kecepatan roda.
-- Target kecepatan roda masih dipetakan secara perkiraan ke PWM.
+- Target kecepatan roda masih dipetakan secara perkiraan (open-loop) ke PWM.
 - Firmware membaca encoder, tetapi belum mengirim bacaan ke ROS 2 atau
   menggunakannya untuk odometri dan kontrol kecepatan tertutup.
 - Belum ada peta waypoint, path planner, deteksi ArUco, atau komunikasi IoT.
+- Node ROS 2 masih bersifat monolitik dalam satu script (`line_tracker_node.py`).
 
-Karena posisi robot belum diketahui dengan baik, fondasi encoder, odometri, dan
-kalibrasi perlu dibuat sebelum waypoint dan path tracking tingkat misi.
+Karena posisi robot belum diketahui dengan baik dan kontrol motor masih open-loop,
+fondasi kontrol kecepatan roda, odometri, refaktorisasi arsitektur, dan uji persepsi
+marker perlu diselesaikan sebelum waypoint dan navigasi tingkat misi dibangun.
 
 ## Gambaran arsitektur yang dituju
 
@@ -25,76 +27,97 @@ kalibrasi perlu dibuat sebelum waypoint dan path tracking tingkat misi.
 Rencana misi / IoT command
           │ tujuan waypoint
           ▼
-Waypoint manager ──► planner / pembuatan path
-                            │ path
+Waypoint manager ──► perencana rute pada graf lintasan
+                            │ target cabang & checkpoint
                             ▼
-Kamera garis + deteksi ArUco ──► path tracker / pengendali
-                  │                       │ cmd_vel (m/s, rad/s)
-                  └── pose marker         ▼
-                                  DDMR kinematika balik
-                                          │ target kecepatan roda
-                                          ▼
-                               kontrol kecepatan roda
-                                          │ PWM
-                                          ▼
-                                  firmware + motor
-                                          │ encoder
-                                          ▼
-                         odometri / estimasi pose robot
-                                          │ pose, status, telemetry
-                                          └────────────► IoT dashboard
+Kamera + Detektor ArUco ──► controller navigasi garis & percabangan
+          │                          │ cmd_vel (m/s, rad/s)
+          └── koreksi drift pose     ▼
+                             DDMR kinematika balik
+                                     │ target kecepatan roda (m/s)
+                                     ▼
+                        serial bridge (dua arah + checksum)
+                                     │ target roda bertanda
+                                     ▼
+                   firmware: kontrol PID kecepatan roda lokal
+                                     │ PWM
+                                     ▼
+                             driver motor + motor
+                                     │ pulsa encoder
+                                     ▼
+                        firmware: bacaan delta ticks
+                                     │ telemetry serial balik
+                                     ▼
+                     ROS 2: node odometri & estimasi pose
+                                     │ pose (x, y, θ), status, telemetry
+                                     └────────────► IoT dashboard
 ```
+
+---
 
 ## Tahap 0 — Rapikan antarmuka dan keselamatan dasar
 
 ### Pekerjaan
 
 - Tetapkan satuan dan konvensi arah di seluruh sistem: meter, detik, radian,
-  `linear.x` dalam m/s, `angular.z` dalam rad/s, kiri/kanan sesuai urutan.
-- Ukur diameter roda dan jarak antar roda; dokumentasikan nilai serta cara
-  mengukurnya.
+  `linear.x` dalam m/s, `angular.z` dalam rad/s, kiri/kanan sesuai urutan kanonik.
+- Ukur diameter roda efektif dan jarak antara pusat roda kiri-kanan (*wheel track*);
+  dokumentasikan nilai serta prosedur pengukurannya.
 - Pastikan arah positif encoder, motor kiri, motor kanan, dan `angular.z` ROS
   konsisten.
-- Tambahkan timeout perintah di firmware: bila tidak ada command dalam batas
-  waktu yang ditentukan, motor berhenti.
-- Pastikan E-stop firmware selalu mengalahkan command dari ROS maupun IoT.
-- Catat konfigurasi hardware: pin, rasio gearbox, pulsa encoder per putaran,
-  tegangan motor, dan port UART.
+- Tambahkan **command timeout** di firmware: bila tidak ada paket serial valid
+  dalam batas waktu yang ditentukan (misalnya 500 ms), motor otomatis berhenti.
+- Pastikan E-stop fisik pada firmware selalu menghentikan motor seketika dan tidak
+  dapat dibatalkan secara software oleh ROS maupun IoT.
+- Catat konfigurasi hardware: pinout, rasio gearbox, pulsa encoder per putaran (CPR),
+  tegangan kerja motor, dan port UART.
 
 ### Selesai jika
 
-- Uji command roda kiri/kanan menghasilkan arah yang diperkirakan.
-- E-stop dan timeout menghentikan motor tanpa bergantung pada koneksi ROS.
-- Parameter fisik robot tercatat dan digunakan oleh node.
+- Uji command roda kiri/kanan menghasilkan arah putaran yang benar pada robot fisik.
+- E-stop dan command timeout terbukti menghentikan motor tanpa bergantung pada ROS.
+- Parameter fisik robot tercatat dan diintegrasikan ke file konfigurasi YAML.
 
-## Tahap 1 — Kontrol kecepatan roda dengan encoder
+---
+
+## Tahap 1 — Kontrol kecepatan roda tertutup dan protokol serial dua arah
+
+### Prinsip pemisahan tugas
+Firmware Arduino Mega 2560 (8-bit AVR 16 MHz) **tidak memiliki hardware floating-point unit (FPU)**.
+Oleh karena itu, firmware hanya bertugas menjalankan loop PID kecepatan roda secara lokal dan
+mengirimkan data mentah pulsa encoder (*delta ticks*). Perhitungan odometri pose $(x, y, \theta)$
+berbasis floating-point dan trigonometri dialokasikan sepenuhnya di sisi ROS 2.
 
 ### Pekerjaan
 
-- Ubah protokol ROS–firmware dari PWM langsung menjadi target kecepatan roda
-  bertanda, misalnya mm/s untuk kiri dan kanan.
+- Ubah protokol serial ROS–firmware dari PWM langsung menjadi target kecepatan roda
+  bertanda, misalnya `mm/s` atau `m/s` untuk kiri dan kanan.
 - Di firmware, hitung kecepatan aktual roda dari delta pulsa encoder dan interval
-  waktu yang diketahui.
-- Tambahkan pengendali kecepatan per roda (misalnya PI) yang mengubah selisih
-  target dan aktual menjadi PWM.
-- Dukungan tanda target harus mengatur arah motor, termasuk mundur dan putar di
-  tempat.
-- Kembalikan telemetry encoder/kecepatan aktual ke ROS; gunakan framing yang
-  jelas dan validasi data serial.
+  waktu sampling yang presisi.
+- Tambahkan kontroler kecepatan tertutup per roda (PI/PID) di firmware yang mengubah
+  selisih kecepatan target dan aktual menjadi PWM.
+- Dukungan tanda target harus mengatur arah motor (maju/mundur/putar di tempat).
+- Buat protokol komunikasi dua arah (*bidirectional*): firmware mengirimkan telemetri
+  *delta ticks* atau kecepatan aktual kembali ke ROS 2.
+- Tambahkan proteksi data serial (framing delimiter yang ketat dan checksum sederhana
+  seperti CRC8 atau XOR) untuk mengantisipasi derau elektrik (*electrical noise*) dari motor.
 
 ### Selesai jika
 
-- Kedua roda dapat mempertahankan target kecepatan rendah dan sedang.
-- Perintah target negatif membalik arah roda dengan benar.
-- Kecepatan aktual dapat diamati di ROS dan sebanding dengan target.
-- Kehilangan komunikasi menghentikan motor.
+- Kedua roda dapat mempertahankan kecepatan target pada beban dan kondisi baterai berbeda.
+- Perintah target negatif membalik arah roda secara mulus.
+- Data telemetri encoder terbaca stabil di ROS 2 tanpa korupsi frame serial saat motor berputar.
+- Kehilangan koneksi serial memicu timeout dan menghentikan motor secara aman.
 
-## Tahap 2 — Odometri DDMR dan pose
+---
+
+## Tahap 2 — Odometri DDMR dan estimasi pose di ROS 2
 
 ### Pekerjaan
 
-- Konversi delta pulsa encoder menjadi jarak roda kiri `ΔsL` dan kanan `ΔsR`.
-- Hitung perpindahan robot:
+- Buat perhitungan odometri di ROS 2 berdasarkan delta ticks yang diterima dari firmware:
+  konversi pulsa menjadi perpindahan roda kiri $\Delta s_L$ dan kanan $\Delta s_R$.
+- Hitung perpindahan robot di koordinat global:
 
   ```text
   Δs     = (ΔsR + ΔsL) / 2
@@ -105,212 +128,169 @@ Kamera garis + deteksi ArUco ──► path tracker / pengendali
   θ      = θ + Δθ
   ```
 
-- Publikasikan pose dan kecepatan sebagai `nav_msgs/Odometry` dengan frame yang
-  konsisten, misalnya `odom` dan `base_link`.
-- Publikasikan transformasi `odom → base_link` untuk visualisasi ROS.
-- Kalibrasikan parameter efektif roda dengan uji jarak lurus dan putaran.
+- Publikasikan pose, twist, dan kovariansi sebagai `nav_msgs/msg/Odometry`.
+- Publikasikan transformasi koordinat `odom -> base_link` via `tf2_ros`.
+- Kalibrasi parameter efektif diameter roda dan jarak roda ($b$) menggunakan uji empiris.
 
 ### Uji kalibrasi yang disarankan
 
-1. Jalankan robot lurus pada jarak terukur; bandingkan jarak fisik dengan
-   odometri.
-2. Putar robot 360 derajat di tempat; periksa galat arah dan posisi akhir.
-3. Ulangi beberapa kali pada permukaan operasi; catat rata-rata dan variasi.
+1. **Uji jarak lurus:** Jalankan robot lurus sejauh jarak terukur (misal 2 meter);
+   bandingkan jarak fisik dengan pembacaan odometri, lalu kalibrasi diameter roda.
+2. **Uji putaran:** Putar robot di tempat sebanyak 360° (atau 5 putaran penuh); periksa
+   galat orientasi akhir $\theta$, lalu kalibrasi parameter jarak antar roda $b$.
+3. Dokumentasikan estimasi akumulasi drift per meter perjalanan pada permukaan operasi.
 
 ### Selesai jika
 
-- Odometri bergerak sesuai uji lurus dan putar dalam toleransi yang disepakati.
-- Pose dapat dilihat pada RViz tanpa transformasi putus.
-- Keterbatasan drift dan selip dicatat.
+- Odometri bergerak konsisten sesuai uji lurus dan putar dalam batas toleransi yang disepakati.
+- Pose dan lintasan robot dapat divisualisasikan dengan mulus di RViz tanpa TF putus.
+- Batasan drift odometri terdokumentasi dengan baik.
 
-## Tahap 3 — Waypoint dan peta intersection
+---
 
-### Definisi yang disarankan
+## Tahap 3 — Eksperimen persepsi dan deteksi ArUco fisik
 
-Representasikan lintasan sebagai **graf waypoint**:
+### Alasan tahapan ini didahulukan sebelum perancangan peta
+Format peta dan penempatan titik henti/intersection sangat bergantung pada batasan fisik optik:
+jarak pandang deteksi, sudut kemiringan (*pitch*) kamera garis, pencahayaan, dan ukuran marker.
+Eksperimen fisik harus dilakukan sebelum menetapkan spesifikasi graf peta.
 
-- Waypoint adalah titik tujuan, misalnya intersection, stasiun, atau area
-  berhenti.
-- Edge menghubungkan dua waypoint dan menyimpan informasi lintasan, arah masuk,
-  jarak perkiraan, serta aturan belok.
-- Waypoint dapat memiliki ID unik yang sama dengan ID ArUco di intersection.
+### Pekerjaan
 
-Contoh:
+- Tentukan skema penempatan ArUco: di lantai lintasan atau pada tiang/dinding samping.
+- Evaluasi bidang pandang (*FOV*) kamera garis saat ini: apakah satu kamera cukup untuk
+  melihat garis di bawah sekaligus mendeteksi ArUco di depan pada jarak deselerasi yang aman,
+  atau apakah diperlukan sudut kamera khusus / kamera sekunder.
+- Kalibrasi lensa kamera (intrinsik dan distorsi) menggunakan `camera_calibration` ROS 2.
+- Implementasikan node deteksi ArUco (OpenCV `cv2.aruco`).
+- Terapkan mekanisme *debouncing* dan konfirmasi: marker harus terdeteksi secara konsisten
+  selama beberapa frame sebelum diterima sebagai sinyal waypoint.
+- Ukur jarak efektif deteksi dan estimasi pose marker relatif terhadap kamera.
+
+### Selesai jika
+
+- Kamera dapat mendeteksi ID ArUco secara andal pada kecepatan gerak robot yang direncanakan.
+- Robot memiliki cukup jarak deselerasi antara saat marker pertama kali terdeteksi hingga
+  mencapai pusat persimpangan.
+- Parameter ukuran marker fisik dan jarak penempatan optimal telah ditetapkan dan dicatat.
+
+---
+
+## Tahap 4 — Refaktorisasi modular arsitektur ROS 2 & format peta graf
+
+### Pekerjaan
+
+- Pecah node monolitik [`line_tracker_node.py`](ros2_ws/src/line_tracker_ros2/line_tracker_ros2/line_tracker_node.py) menjadi node-node dengan tanggung jawab tunggal (*single responsibility*):
+  1. `serial_bridge_node`: Komunikasi serial dua arah, publikasi raw encoder/ticks, dan pengiriman target kecepatan roda.
+  2. `odometry_node`: Menghitung odometri pose dan mempublikasikan TF `odom -> base_link`.
+  3. `line_detector_node`: Memproses frame kamera untuk mendeteksi garis dan menerbitkan error garis.
+  4. `aruco_detector_node`: Memproses frame untuk deteksi ID ArUco dan pose marker.
+  5. `mission_controller_node`: State machine pengatur navigasi dan eksekusi misi.
+- Definisikan format peta lintasan berbasis graf (YAML/JSON):
+  - **Node (Waypoint):** ID unik, pemetaan ke ID ArUco, koordinat perkiraan $(x, y)$, tipe titik (intersection, stop, charging).
+  - **Edge (Segmen Garis):** Koneksi antar-node, arah gerak, batas kecepatan, instruksi percabangan di persimpangan (misal: belok kiri, lurus, belok kanan).
+- Buat Waypoint & Route Manager yang menerima perintah tujuan dan menghasilkan daftar
+  urutan waypoint serta instruksi percabangan yang harus dilalui.
+- Definisikan state machine misi: `IDLE`, `NAVIGATING`, `AT_INTERSECTION`, `ARRIVED`, `PAUSED`, `ERROR`.
+
+### Selesai jika
+
+- Node-node ROS 2 berjalan modular, terhubung lewat topik standar, dan dapat diuji secara terpisah.
+- File peta graf dapat dimuat dan diverifikasi validitas koneksinya.
+- Waypoint Manager dapat menghasilkan urutan rute dari titik awal ke tujuan.
+
+---
+
+## Tahap 5 — Navigasi line tracking percabangan (Branching Line Tracking)
+
+### Karakteristik navigasi
+AGV ini adalah **Line-Guided AGV**, bukan AGV navigasi ruang bebas tanpa panduan.
+Robot menempel pada garis fisik dan menggunakan odometri serta ArUco sebagai pemandu segmen
+dan pengambil keputusan cabang di persimpangan:
 
 ```text
-[Aruco 10 / W0] ── lurus ── [Aruco 11 / W1]
-                               │
-                               └── belok kanan ── [Aruco 12 / W2]
+Ikuti garis segmen saat ini
+          ↓
+Odometri mendeteksi mendekati intersection → kurangi kecepatan
+          ↓
+Deteksi ArUco terkonfirmasi cocok dengan waypoint target
+          ↓
+Koreksi drift estimasi posisi odometri berdasarkan pose/posisi ArUco
+          ↓
+Eksekusi instruksi percabangan (pilih cabang garis: belok kiri / lurus / kanan)
+          ↓
+Kunci deteksi pada garis baru & lanjutkan navigasi segmen berikutnya
 ```
 
 ### Pekerjaan
 
-- Buat format peta sederhana (YAML/JSON) berisi ID waypoint, koneksi, arah,
-  aturan belok, dan batas kecepatan.
-- Buat waypoint manager yang menerima tujuan dan menentukan urutan node pada
-  graf.
-- Implementasikan state mission: `IDLE`, `NAVIGATING`, `ARRIVED`, `PAUSED`,
-  `ERROR`.
-- Definisikan perilaku jika tujuan tidak terhubung, waypoint terlewat, atau
-  marker tidak terbaca.
+- Implementasikan transisi state saat mendekati persimpangan berdasarkan estimasi jarak odometri
+  dan deteksi visual ArUco.
+- Kembangkan logika pemilihan cabang (*branch switching*) pada pengolah kontur garis kamera
+  (misalnya memilih ROI kontur garis sebelah kiri saat rute memerintahkan belok kiri).
+- Gunakan pose ArUco di persimpangan sebagai *ground-truth checkpoint* untuk mengoreksi
+  akumulasi drift odometri.
+- Implementasikan penanganan kondisi darurat:
+  - Garis hilang di luar persimpangan: robot berhenti seketika.
+  - ArUco tidak terdeteksi pada jarak perkiraan: robot melambat hingga berhenti dan meminta bantuan (*recovery mode*).
+  - Terbaca marker tak dikenal / tidak sesuai urutan rute: robot berhenti dengan aman.
 
 ### Selesai jika
 
-- Robot dapat menerima satu tujuan waypoint dan mengeluarkan urutan waypoint
-  yang dapat diperiksa.
-- Misi dapat dihentikan, dilanjutkan, dan dibatalkan dengan state yang jelas.
+- Robot berhasil menyelesaikan rute multititik yang melibatkan beberapa persimpangan (belok kiri, lurus, dan kanan) tanpa intervensi manual.
+- Pemilihan cabang garis berjalan mulus tanpa kehilangan garis.
+- Drift odometri terkoreksi setiap kali melewati persimpangan bertanda ArUco.
 
-## Tahap 4 — Deteksi ArUco dan koreksi pose di intersection
+---
 
-### Rekomendasi pemakaian marker
-
-- Letakkan marker di lokasi intersection yang terlihat dari kamera sebelum
-  robot memasuki titik keputusan.
-- Pakai ID marker sebagai identitas waypoint/intersection.
-- Jika ukuran marker diketahui dan kamera dikalibrasi, estimasi pose relatif
-  marker terhadap kamera untuk membantu koreksi posisi dan arah.
-- Gunakan odometri untuk estimasi gerak di antara marker; gunakan marker untuk
-  mengenali titik dan mengurangi drift saat marker terlihat.
-- Terapkan debouncing/konfirmasi: marker harus terdeteksi stabil pada beberapa
-  frame sebelum dianggap sebagai waypoint yang tercapai.
-- Simpan kalibrasi kamera, ukuran marker, posisi marker terhadap pusat
-  intersection, dan orientasi marker.
-
-### Perhatian desain
-
-- Marker ID hanya memberi identitas; ID saja tidak memberitahu jarak dan arah
-  robot terhadap marker. Untuk koreksi pose, perlu ukuran marker yang diketahui,
-  kalibrasi intrinsik kamera, dan transformasi kamera terhadap robot.
-- Uji sudut pandang, tinggi kamera, pencahayaan, blur, ukuran marker di frame,
-  dan occlusion pada kecepatan operasi.
-- Hindari menempatkan marker tepat di area yang tertutup roda, barang, atau
-  bagian robot.
-- Siapkan fallback: jika marker tidak terbaca, robot melambat/berhenti dan
-  meminta pemulihan, bukan mengambil cabang secara acak.
-
-### Selesai jika
-
-- ID intersection terbaca berulang pada kondisi lapangan yang ditentukan.
-- Deteksi marker tidak memicu keputusan ganda saat robot diam atau bergerak
-  melewati satu marker.
-- Pose marker dapat dipakai untuk mengoreksi pose odometri di intersection.
-
-## Tahap 5 — Path tracking antar-waypoint
-
-### Pekerjaan
-
-- Pisahkan **planner** yang menentukan lintasan dari **tracker** yang membuat
-  robot mengikuti lintasan tersebut.
-- Representasikan edge sebagai segmen garis, kurva, atau lintasan yang dibentuk
-  dari titik-titik berurutan.
-- Mulai dengan tracker sederhana (misalnya Pure Pursuit untuk path bertitik) atau
-  line following yang dikaitkan dengan cabang/arah waypoint.
-- Hitung command `v, ω`, batasi kecepatan serta percepatan, lalu teruskan ke
-  kinematika DDMR dan kontrol roda.
-- Perlambat sebelum intersection, verifikasi ID ArUco, lakukan keputusan belok,
-  lalu lanjutkan ke waypoint berikutnya.
-- Tambahkan toleransi tiba (jarak dan arah) serta kondisi berhenti.
-
-### Urutan perilaku pada intersection
-
-```text
-ikuti path menuju intersection
-        ↓
-perlambat dan deteksi ArUco
-        ↓
-konfirmasi ID cocok dengan waypoint berikutnya
-        ↓
-pilih cabang dari rencana misi
-        ↓
-belok dan verifikasi marker/path berikutnya
-```
-
-### Selesai jika
-
-- Robot mencapai beberapa waypoint berurutan tanpa intervensi manual pada
-  kecepatan rendah.
-- Robot mengambil cabang sesuai rute dan berhenti jika marker atau path hilang.
-- Pengujian merekam tingkat keberhasilan, galat lintasan, dan waktu perjalanan.
-
-## Tahap 6 — Integrasi IoT: telemetry dan command
+## Tahap 6 — Integrasi IoT: telemetry dan command tingkat misi
 
 ### Telemetry yang berguna
 
-- Pose/odometri dan waypoint saat ini.
+- Pose/odometri terkoreksi dan ID waypoint saat ini.
 - Kecepatan target dan aktual tiap roda.
-- Status misi dan FSM: idle, berjalan, pause, selesai, error, E-stop.
-- Kualitas deteksi garis/ArUco dan timestamp.
-- Baterai, suhu, atau alarm hardware jika sensor tersedia.
+- Status misi dan FSM: `IDLE`, `NAVIGATING`, `AT_INTERSECTION`, `ARRIVED`, `PAUSED`, `ERROR`, `ESTOP`.
+- Kualitas deteksi garis dan ID ArUco terakhir yang terverifikasi.
+- Status komunikasi serial dan kesehatan sensor/node.
 
-### Command yang berguna
+### Command yang diizinkan
 
-- Minta robot menuju waypoint atau menjalankan misi bernama.
-- Pause, resume, cancel, dan request status.
-- Ubah parameter operasi terbatas seperti batas kecepatan, dengan validasi.
-- Hindari command IoT berupa PWM motor langsung; command sebaiknya berupa niat
-  tingkat misi agar keselamatan dan kontrol tetap di robot.
+- Kirim tujuan misi: `go_to_waypoint(id)` atau urutan rute bernama.
+- Kendali alur: `pause`, `resume`, `cancel_mission`.
+- Reset status / pemulihan kesalahan (*error acknowledgement*).
+- **Catatan keselamatan:** IoT **dilarang keras** mengirimkan nilai PWM mentah atau kecepatan motor langsung tanpa melalui controller misi lokal di robot. Command IoT tidak boleh mengesampingkan tombol E-stop fisik.
 
 ### Rekomendasi implementasi
 
-- Mulai dari broker/message transport yang sederhana (misalnya MQTT) jika
-  arsitektur jaringan proyek belum ditentukan.
-- Pisahkan channel telemetry dan command; gunakan ID pesan, timestamp, dan
-  acknowledgement untuk command penting.
-- Definisikan format payload berversi (misalnya JSON) dan dokumentasikan nama
-  topic, satuan, QoS, serta perilaku saat koneksi terputus.
-- Command harus tervalidasi di robot, memiliki batas waktu, dan tidak boleh
-  membatalkan E-stop lokal.
-- Jika koneksi IoT hilang, robot menyelesaikan perilaku aman yang sudah
-  ditentukan (umumnya berhenti atau menyelesaikan segmen aman), bukan terus
-  menerima command lama.
-- Untuk jaringan di luar LAN tepercaya, gunakan autentikasi dan enkripsi.
+- Gunakan broker ringan (misalnya MQTT) dengan channel terpisah untuk telemetri dan command.
+- Definisikan skema payload terstruktur (JSON berversi) lengkap dengan ID pesan, timestamp, dan acknowledgement (ACK/NACK).
+- Terapkan safety timeout pada sisi IoT bridge: jika koneksi jaringan IoT terputus, robot tetap menyelesaikan segmen berjalan atau berhenti dengan aman sesuai kebijakan operasional.
 
 ### Selesai jika
 
-- Dashboard menerima telemetry dengan satuan dan timestamp yang jelas.
-- Operator dapat meminta waypoint, pause, resume, dan cancel.
-- Command duplikat/kedaluwarsa tidak menjalankan aksi berulang atau berbahaya.
-- Kehilangan jaringan dan restart broker ditangani dengan aman.
+- Dashboard IoT menampilkan telemetri robot secara realtime dengan latensi terkontrol.
+- Operator dapat mengirim perintah tujuan dan membatalkan misi dari jarak jauh.
+- Putusnya jaringan tidak menyebabkan bahaya atau perilaku aneh pada robot fisik.
 
-## Prioritas yang disarankan
+---
 
-| Urutan | Fokus | Alasan |
-| ---: | --- | --- |
-| 1 | Safety, parameter fisik, dan serial yang andal | Menjadi dasar uji motor yang aman |
-| 2 | Kontrol kecepatan roda dari encoder | Membuat command gerak dapat diprediksi |
-| 3 | Odometri dan visualisasi pose | Waypoint memerlukan estimasi posisi |
-| 4 | Deteksi ArUco dan koreksi di intersection | Mengurangi drift dan memberi identitas node peta |
-| 5 | Waypoint manager dan path tracking | Menyusun navigasi dari satu titik ke titik lain |
-| 6 | IoT telemetry, lalu command misi | Telemetry lebih aman sebagai integrasi awal |
+## Prioritas dan urutan tahapan yang disesuaikan
 
-IoT dapat dikembangkan paralel sebagai **monitoring read-only** setelah topic ROS
-dan satuannya stabil. Tunda command jarak jauh sampai timeout, E-stop, dan
-perilaku saat koneksi hilang sudah diuji.
+| Urutan | Fase | Fokus Utama | Alasan Rekayasa |
+| ---: | :--- | :--- | :--- |
+| **1** | **Tahap 0** | Keselamatan fisik, parameter mekanik, command timeout | Fondasi wajib sebelum motor diuji di lantai |
+| **2** | **Tahap 1** | Kontrol kecepatan tertutup & protokol serial dua arah | Membuat respon gerak linier dan terukur; proteksi noise |
+| **3** | **Tahap 2** | Odometri DDMR dan estimasi pose di ROS 2 | Mengetahui perpindahan fisik tanpa membebani mikrokontroler |
+| **4** | **Tahap 3** | Uji persepsi optik dan deteksi ArUco fisik | Memastikan kamera mampu melihat marker sebelum mendesain peta |
+| **5** | **Tahap 4** | Refaktorisasi modular ROS 2 & peta graf waypoint | Menata arsitektur kode bersih dan representasi rute |
+| **6** | **Tahap 5** | Navigasi line tracking percabangan di intersection | Menyelesaikan navigasi otonom terpandu garis antar-waypoint |
+| **7** | **Tahap 6** | Integrasi IoT (telemetri read-only, lalu command misi) | Menghubungkan robot ke lapisan cloud/dashboard secara aman |
+
+---
 
 ## Saran tambahan
 
-1. **Jangan mengandalkan odometri saja untuk rute panjang.** Selip dan variasi
-   permukaan membuat galat menumpuk. ArUco di intersection cocok menjadi
-   checkpoint untuk mengoreksi posisi, tetapi tetap perlu validasi pose.
-2. **Kalibrasi kamera sebelum mengandalkan pose ArUco.** Deteksi ID dapat bekerja
-   tanpa pose akurat, tetapi estimasi jarak/orientasi butuh parameter kamera dan
-   ukuran marker yang benar.
-3. **Gunakan satu sumber kebenaran untuk peta.** ID ArUco, waypoint, cabang,
-   dan aturan belok sebaiknya berasal dari satu file peta, bukan disalin ke
-   beberapa node.
-4. **Pisahkan ROS node berdasarkan tanggung jawab setelah alur stabil.** Contoh:
-   camera/marker perception, odometry, wheel controller, waypoint manager,
-   path tracker, dan IoT bridge. Untuk prototipe awal boleh tetap lebih sederhana.
-5. **Catat hasil setiap uji.** Simpan parameter, permukaan, kecepatan, rute,
-   galat akhir, deteksi marker gagal, dan tindakan recovery. Ini membantu
-   membedakan masalah mekanik, sensor, kontrol, dan jaringan.
-
-## Metrik evaluasi yang disarankan
-
-- Galat jarak odometri setelah menempuh lintasan terukur.
-- Galat sudut setelah putaran terukur.
-- Persentase deteksi marker yang benar dan waktu deteksi.
-- Persentase keberhasilan mencapai waypoint dan menyelesaikan rute.
-- Galat silang lintasan (cross-track error) dan waktu perjalanan.
-- Waktu dari command IoT diterima hingga acknowledgement, serta perilaku saat
-  koneksi terputus.
+1. **Jaga isolasi komputasi:** Arduino Mega 2560 difokuskan hanya untuk I/O real-time (baca interupsi encoder, hitung PID motor, kontrol PWM, dan pantau E-Stop). Serahkan seluruh kalkulasi trigonometri, matriks, visi komputer, dan navigasi ke komputer Linux/ROS 2.
+2. **Jangan andalkan odometri murni untuk rute panjang:** Selip roda pada lantai akan mendistorsi pose. Manfaatkan marker ArUco di intersection sebagai *anchor point* untuk mereset/mengoreksi akumulasi drift.
+3. **Peta sebagai Single Source of Truth:** Seluruh relasi node, ID ArUco, koneksi edge, dan arah belok didefinisikan dalam satu file konfigurasi terpusat (YAML), bukan di-hardcode ke dalam kode node.
+4. **Catat log hasil uji:** Selalu rekam galat odometri, tingkat keberhasilan deteksi ArUco, dan log transisi FSM di setiap tahap pengujian untuk mempermudah isolasi masalah antara mekanik, sensor, kontrol, dan software.
