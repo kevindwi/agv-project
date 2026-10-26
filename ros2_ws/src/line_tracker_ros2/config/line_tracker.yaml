@@ -1,8 +1,15 @@
 line_tracker_node:
   ros__parameters:
-    camera_index: 3 # index perangkat V4L2
+    camera_index: 1 # index perangkat V4L2
     serial_port: /dev/ttyUSB0
     baud_rate: 115200
+
+    # --- Kalibrasi fisik robot (Tahap 0) ---
+    wheel_diameter_m: 0.15 # diameter efektif roda (15 cm)
+    wheel_separation_m: 0.48 # jarak pusat roda kiri-kanan (48 cm)
+    gear_ratio: 30.0 # gearbox 30:1
+    encoder_pulses_per_motor_rev: 30 # pulsa encoder per putaran poros motor
+    encoder_pulses_per_wheel_rev: 900 # 30 x 30 = tepat 900 pulsa/putaran roda
 
     # PID line tracking (error ternormalisasi)
     kp: 1.0
@@ -10,7 +17,6 @@ line_tracker_node:
     kd: 0.0
 
     linear_speed_mps: 0.024 # kecepatan maju robot (m/s) -> PWM ~20
-    wheel_separation_m: 0.48 # jarak tengah roda kiri-kanan (ukur robot)
     max_angular_speed_radps: 1.0 # batas kecepatan putar robot
     max_wheel_speed_mps: 0.30 # skala perkiraan untuk konversi ke PWM
     publish_rate_hz: 30.0 # frekuensi loop (setara FPS kamera)

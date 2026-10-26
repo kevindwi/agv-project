@@ -12,32 +12,21 @@ from launch_ros.actions import Node
 def launch_setup(context, *args, **kwargs):
     config_file = LaunchConfiguration("config_file").perform(context)
 
-    # Kumpulkan parameter overrides dari CLI jika diisi oleh user
+    # Hanya parameter yang dideklarasikan dan digunakan oleh node.
     overrides = {}
-    param_keys = [
-        "camera_index",
-        "serial_port",
-        "baud_rate",
-        "linear_speed_mps",
-        "wheel_separation_m",
-        "max_angular_speed_radps",
-        "max_wheel_speed_mps",
-        "publish_rate_hz",
-        "kp",
-        "ki",
-        "kd",
-    ]
+    parameter_types = {
+        "camera_index": int,
+        "serial_port": str,
+        "baud_rate": int,
+        "kp": float,
+        "ki": float,
+        "kd": float,
+    }
 
-    for key in param_keys:
+    for key, value_type in parameter_types.items():
         val = LaunchConfiguration(key).perform(context).strip()
         if val != "":
-            try:
-                if "." in val:
-                    overrides[key] = float(val)
-                else:
-                    overrides[key] = int(val)
-            except ValueError:
-                overrides[key] = val
+            overrides[key] = value_type(val)
 
     node_params = [config_file]
     if overrides:
@@ -81,34 +70,9 @@ def generate_launch_description():
             description="Baud rate komunikasi serial, meng-override YAML jika diisi",
         ),
         DeclareLaunchArgument(
-            "linear_speed_mps",
-            default_value="",
-            description="Kecepatan maju linier robot (m/s), meng-override YAML jika diisi",
-        ),
-        DeclareLaunchArgument(
-            "wheel_separation_m",
-            default_value="",
-            description="Jarak tapak roda kiri-kanan (m), meng-override YAML jika diisi",
-        ),
-        DeclareLaunchArgument(
-            "max_angular_speed_radps",
-            default_value="",
-            description="Batas kecepatan putar robot (rad/s), meng-override YAML jika diisi",
-        ),
-        DeclareLaunchArgument(
-            "max_wheel_speed_mps",
-            default_value="",
-            description="Skala kecepatan roda maks untuk pemetaan PWM, meng-override YAML jika diisi",
-        ),
-        DeclareLaunchArgument(
-            "publish_rate_hz",
-            default_value="",
-            description="Frekuensi pemrosesan kamera (Hz), meng-override YAML jika diisi",
-        ),
-        DeclareLaunchArgument(
             "kp",
             default_value="",
-            description="Gain Proportional PID, meng-override YAML jika diisi",
+            description="Gain proportional PID line tracker, meng-override YAML jika diisi",
         ),
         DeclareLaunchArgument(
             "ki",
