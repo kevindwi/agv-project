@@ -21,8 +21,11 @@ Setiap perubahan format data **wajib** diperbarui di sini agar kedua sisi tetap 
 <a>,<b>\n
 ```
 
-- `<a>` dan `<b>`: bilangan bulat desimal PWM, rentang **0–255**.
+- `<a>` dan `<b>`: bilangan bulat desimal PWM, rentang **−255…255**.
+  Positif = maju, negatif = mundur, `0` = berhenti.
 - Contoh: `120,100\n`
+- Catatan: node ROS saat ini hanya mengirim `0…255` (belum mengirim nilai
+  negatif), sehingga mundur belum dimanfaatkan end-to-end.
 
 ## 3. Semantik field
 

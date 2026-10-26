@@ -8,18 +8,25 @@ Dokumen ini merinci tahapan lanjutan untuk mencapai tiga tujuan proyek:
 
 ## Kondisi proyek saat ini
 
-- Kamera dan deteksi garis sudah ada di node ROS 2.
-- PID menghasilkan perintah gerak dan kinematika balik DDMR menghitung target
-  kecepatan roda.
-- Target kecepatan roda masih dipetakan secara perkiraan (open-loop) ke PWM.
-- Firmware membaca encoder, tetapi belum mengirim bacaan ke ROS 2 atau
-  menggunakannya untuk odometri dan kontrol kecepatan tertutup.
+- Kamera, deteksi garis, dan PID line tracking tersedia di node ROS 2.
+- ROS mengirim `cmd_vel` (`linear.x` dalam m/s dan `angular.z` dalam rad/s)
+  melalui frame serial `C,<linear_x>,<angular_z>`.
+- Firmware mengubah `cmd_vel` menjadi target ticks per interval kontrol,
+  membaca delta encoder, menjalankan PID per roda, lalu mengeluarkan PWM bertanda.
+- Firmware mengirim delta encoder kembali ke ROS dengan frame
+  `E,<left_ticks>,<right_ticks>`.
+- Node ROS mengakumulasi pose $(x,y,\theta)$ dari delta encoder, tetapi belum
+  mempublikasikan `nav_msgs/Odometry` atau TF.
+- Kontrol PID, tanda encoder, timeout, dan odometri belum divalidasi secara
+  menyeluruh di robot fisik. Gain PID masih nilai awal.
+- Protokol serial belum memiliki checksum; pembacaan serial ROS masih berada di
+  callback node line tracker.
 - Belum ada peta waypoint, path planner, deteksi ArUco, atau komunikasi IoT.
 - Node ROS 2 masih bersifat monolitik dalam satu script (`line_tracker_node.py`).
 
-Karena posisi robot belum diketahui dengan baik dan kontrol motor masih open-loop,
-fondasi kontrol kecepatan roda, odometri, refaktorisasi arsitektur, dan uji persepsi
-marker perlu diselesaikan sebelum waypoint dan navigasi tingkat misi dibangun.
+Prioritas saat ini adalah validasi kontrol roda dan odometri secara fisik, lalu
+mempublikasikan pose melalui antarmuka ROS standar sebelum waypoint dan navigasi
+tingkat misi dibangun.
 
 ## Gambaran arsitektur yang dituju
 
@@ -36,7 +43,7 @@ Kamera + Detektor ArUco ──► controller navigasi garis & percabangan
                              DDMR kinematika balik
                                      │ target kecepatan roda (m/s)
                                      ▼
-                        serial bridge (dua arah + checksum)
+                        serial bridge (dua arah; checksum masih direncanakan)
                                      │ target roda bertanda
                                      ▼
                    firmware: kontrol PID kecepatan roda lokal
@@ -82,23 +89,27 @@ Kamera + Detektor ArUco ──► controller navigasi garis & percabangan
 
 ## Tahap 1 — Kontrol kecepatan roda tertutup dan protokol serial dua arah
 
+**Status: implementasi dasar sudah ada; tuning dan validasi hardware masih terbuka.**
+
 ### Prinsip pemisahan tugas
-Firmware Arduino Mega 2560 (8-bit AVR 16 MHz) **tidak memiliki hardware floating-point unit (FPU)**.
-Oleh karena itu, firmware hanya bertugas menjalankan loop PID kecepatan roda secara lokal dan
-mengirimkan data mentah pulsa encoder (*delta ticks*). Perhitungan odometri pose $(x, y, \theta)$
-berbasis floating-point dan trigonometri dialokasikan sepenuhnya di sisi ROS 2.
+Firmware Arduino Mega 2560 (8-bit AVR 16 MHz) tidak memiliki hardware floating-point
+unit. Implementasi saat ini tetap memakai operasi `float` sederhana untuk konversi
+`cmd_vel` ke target ticks dan menjalankan PID lokal. Perhitungan pose serta
+trigonometri dilakukan di ROS 2.
 
 ### Pekerjaan
 
-- Ubah protokol serial ROS–firmware dari PWM langsung menjadi target kecepatan roda
-  bertanda, misalnya `mm/s` atau `m/s` untuk kiri dan kanan.
-- Di firmware, hitung kecepatan aktual roda dari delta pulsa encoder dan interval
-  waktu sampling yang presisi.
-- Tambahkan kontroler kecepatan tertutup per roda (PI/PID) di firmware yang mengubah
-  selisih kecepatan target dan aktual menjadi PWM.
-- Dukungan tanda target harus mengatur arah motor (maju/mundur/putar di tempat).
-- Buat protokol komunikasi dua arah (*bidirectional*): firmware mengirimkan telemetri
-  *delta ticks* atau kecepatan aktual kembali ke ROS 2.
+- [x] Ganti perintah PWM langsung dengan frame `C,<linear_x>,<angular_z>`; firmware
+  menghitung target ticks kiri dan kanan untuk tiap interval kontrol.
+- [x] Tambahkan PID terpisah untuk tiap roda; input PID adalah delta ticks terukur
+  pada interval kontrol, output-nya PWM bertanda.
+- [x] Tambahkan dukungan arah motor berdasarkan tanda output PWM.
+- [x] Tambahkan frame balik `E,<left_ticks>,<right_ticks>` untuk delta encoder.
+- [x] Tambahkan timeout perintah serial 500 ms di firmware.
+- [ ] Tuning gain PID dan validasi kecepatan roda pada beban serta tegangan baterai
+  berbeda. Kontrol saat ini menggunakan target ticks per interval, belum estimator
+  kecepatan dalam m/s atau ticks/s.
+- [ ] Validasi arah dan tanda encoder pada gerak maju, mundur, dan putar di tempat.
 - Tambahkan proteksi data serial (framing delimiter yang ketat dan checksum sederhana
   seperti CRC8 atau XOR) untuk mengantisipasi derau elektrik (*electrical noise*) dari motor.
 
@@ -113,9 +124,13 @@ berbasis floating-point dan trigonometri dialokasikan sepenuhnya di sisi ROS 2.
 
 ## Tahap 2 — Odometri DDMR dan estimasi pose di ROS 2
 
+**Status: akumulasi pose dasar ada di node; publikasi standar ROS dan validasi belum ada.**
+
 ### Pekerjaan
 
-- Buat perhitungan odometri di ROS 2 berdasarkan delta ticks yang diterima dari firmware:
+- [x] Hitung perpindahan roda dan akumulasikan pose internal $(x,y,\theta)$ di node
+  line tracker berdasarkan delta ticks dari firmware.
+- [ ] Buat perhitungan odometri di ROS 2 berdasarkan delta ticks yang diterima dari firmware:
   konversi pulsa menjadi perpindahan roda kiri $\Delta s_L$ dan kanan $\Delta s_R$.
 - Hitung perpindahan robot di koordinat global:
 
@@ -128,7 +143,7 @@ berbasis floating-point dan trigonometri dialokasikan sepenuhnya di sisi ROS 2.
   θ      = θ + Δθ
   ```
 
-- Publikasikan pose, twist, dan kovariansi sebagai `nav_msgs/msg/Odometry`.
+- [ ] Publikasikan pose, twist, dan kovariansi sebagai `nav_msgs/msg/Odometry`.
 - Publikasikan transformasi koordinat `odom -> base_link` via `tf2_ros`.
 - Kalibrasi parameter efektif diameter roda dan jarak roda ($b$) menggunakan uji empiris.
 

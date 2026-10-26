@@ -1,8 +1,8 @@
 # Checklist Pengembangan AGV
 
 Checklist ini mengikuti urutan tahapan yang disesuaikan pada [roadmap pengembangan](roadmap.md).
-Item bertanda `[x]` adalah kemampuan yang sudah tersedia di kode saat ini; tetap validasi
-pada robot fisik sebelum menganggapnya selesai untuk operasi.
+Item `[x]` berarti sudah tersedia di kode atau dokumentasi. Item tersebut belum tentu
+sudah diuji pada robot fisik; validasi hardware ditandai terpisah.
 
 ## 0. Kondisi sekarang
 
@@ -11,35 +11,53 @@ pada robot fisik sebelum menganggapnya selesai untuk operasi.
 - [x] PID menghasilkan perintah kecepatan putar `ω`.
 - [x] Kinematika balik DDMR menghitung target kecepatan roda kiri dan kanan.
 - [x] Menerbitkan gambar debug ke `/line_tracker/debug_image`.
-- [x] Menerbitkan `/cmd_vel`, `/line_tracker/wheel_speeds`, dan `/motor_pwm`.
-- [x] Mengirim PWM kiri/kanan melalui serial ke firmware.
+- [x] Menerbitkan `/cmd_vel` dari line tracker.
+- [x] Mengirim `C,<linear_x>,<angular_z>` melalui serial ke firmware.
+- [x] Menerima delta encoder `E,<left_ticks>,<right_ticks>` dari firmware.
+- [x] Mengakumulasikan pose internal $(x,y,\theta)$ berdasarkan delta encoder.
 - [ ] Memvalidasi arah belok dan semua satuan pada robot fisik.
 
 ## 1. Keselamatan, hardware, dan antarmuka dasar (Tahap 0)
 
-- [ ] Ukur diameter efektif kedua roda dan jarak antara pusat roda kiri-kanan (*wheel track*).
-- [ ] Catat konfigurasi encoder: pulsa per putaran (*CPR*), rasio gearbox, dan resolusi efektif.
+- [x] Ukur diameter efektif kedua roda dan jarak antara pusat roda kiri-kanan (*wheel track*).
+  - Diameter roda efektif: **15 cm (0,15 m)**; radius **0,075 m**.
+  - *Wheel track*: **48 cm (0,48 m)**.
+- [x] Catat konfigurasi encoder: pulsa per putaran (*CPR*), rasio gearbox, dan resolusi efektif.
+  - Encoder: **30 pulsa/putaran poros motor**.
+  - Gearbox: **30:1**.
+  - Resolusi roda: **900 pulsa/putaran roda** (30 × 30).
 - [ ] Validasi arah putaran motor kiri/kanan dan polaritas hitungan pulsa encoder.
+  - Prosedur ada di [`hardware.md`](hardware.md#41-arah-putaran-motor).
 - [ ] Validasi koneksi ROS ke `Serial1` Arduino Mega dan pastikan port stabil.
-- [ ] Tambahkan **command timeout** di firmware: jika dalam $\ge 500\text{ ms}$ tidak ada frame serial valid, motor otomatis berhenti.
+- [x] Tambahkan **command timeout** 500 ms di firmware ketika state `MOVING`.
 - [ ] Uji fungsi E-stop fisik: pastikan selalu memutus pergerakan motor seketika dan tidak dapat diabaikan oleh software.
-- [ ] Dokumentasikan satuan kanonik (m, rad, s), urutan token serial, dan simpan nilai kalibrasi di konfigurasi YAML.
+- [x] Dokumentasikan satuan kanonik (m, rad, s), urutan token serial, dan simpan nilai kalibrasi di konfigurasi YAML.
+  - Satuan, konvensi tanda, pinout, dan prosedur: [`hardware.md`](hardware.md).
+  - Kalibrasi tersimpan di `ros2_ws/src/line_tracker_ros2/config/line_tracker.yaml`.
 
 ## 2. Kontrol kecepatan tertutup & serial dua arah (Tahap 1)
 
-- [ ] Tentukan format frame serial target kecepatan roda bertanda (misal `mm/s`).
-- [ ] Implementasikan perhitungan kecepatan aktual roda di firmware dari delta pulsa encoder dan interval waktu sampling.
-- [ ] Implementasikan loop kontrol PI/PID kecepatan terpisah untuk roda kiri dan roda kanan pada firmware.
-- [ ] Implementasikan arah maju, mundur, dan putar di tempat berdasarkan tanda target kecepatan.
-- [ ] Buat pengiriman telemetri *delta ticks* atau kecepatan aktual dari firmware kembali ke ROS 2.
+- [x] Tentukan format perintah serial `C,<linear_x>,<angular_z>` dan balasan
+  `E,<left_ticks>,<right_ticks>`.
+- [x] Hitung target ticks kiri/kanan dari `cmd_vel` di firmware.
+- [x] Implementasikan PID terpisah untuk roda kiri dan kanan; input-nya delta ticks
+  per interval kontrol, output-nya PWM bertanda.
+- [x] Implementasikan arah maju/mundur motor dari tanda PWM hasil PID.
+- [x] Kirim delta ticks encoder dari firmware kembali ke ROS 2.
+- [x] Tambahkan timeout perintah 500 ms di firmware.
+- [ ] Uji dan tuning PID. Gain saat ini nilai awal dan belum tervalidasi.
+- [ ] Validasi tanda encoder dan arah motor untuk maju, mundur, serta putar di tempat.
+- [ ] Ukur kecepatan aktual roda pada beban dan tegangan baterai berbeda.
 - [ ] Tambahkan proteksi serial: *delimiter* paket yang ketat dan *checksum* (CRC8/XOR) untuk menolak derau elektrik motor.
-- [ ] Uji stabilitas kecepatan roda saat diberi beban dan saat tegangan baterai berubah.
 - [ ] Uji perilaku motor saat kabel serial dicabut tiba-tiba (harus memicu timeout).
 
 ## 3. Odometri DDMR dan estimasi pose di ROS 2 (Tahap 2)
 
-- [ ] Di ROS 2, konversikan delta pulsa encoder yang diterima menjadi jarak roda $\Delta s_L$ dan $\Delta s_R$.
-- [ ] Hitung $\Delta s$, $\Delta\theta$, dan perbarui pose robot $(x, y, \theta)$ di koordinat global ROS 2.
+- [x] Di ROS 2, konversikan delta pulsa encoder yang diterima menjadi jarak roda
+  $\Delta s_L$ dan $\Delta s_R$.
+- [x] Hitung $\Delta s$, $\Delta\theta$, dan perbarui pose internal $(x,y,\theta)$
+  di node line tracker.
+- [ ] Pisahkan odometri dari node line tracker ke node khusus.
 - [ ] Publikasikan topik `nav_msgs/msg/Odometry` dengan frame `odom` dan `base_link`.
 - [ ] Publikasikan transformasi koordinat `odom -> base_link` menggunakan `tf2_ros`.
 - [ ] Lakukan uji jalan lurus pada jarak fisik terukur (misal 2 meter) dan kalibrasi diameter roda.

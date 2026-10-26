@@ -30,6 +30,7 @@ diterbitkan.
 ```text
 firmware/                         Firmware PlatformIO untuk Arduino Mega
 ros2_ws/src/line_tracker_ros2/    Node kamera, PID, DDMR, dan serial
+docs/hardware.md                  Parameter fisik, konvensi, dan kalibrasi
 docs/serial_protocol.md           Kontrak komunikasi serial
 ```
 
@@ -122,19 +123,25 @@ Edit [`line_tracker.yaml`](ros2_ws/src/line_tracker_ros2/config/line_tracker.yam
 
 | Parameter | Default | Arti |
 | --- | ---: | --- |
-| `camera_index` | `2` | Indeks V4L2, misalnya `/dev/video2` |
+| `camera_index` | `3` | Indeks V4L2, misalnya `/dev/video3` |
 | `serial_port` | `/dev/ttyUSB0` | Port adaptor UART yang terhubung ke `Serial1` |
 | `baud_rate` | `115200` | Harus sama dengan firmware |
 | `kp`, `ki`, `kd` | `1.0, 0.0, 0.0` | Gain PID; output menjadi `ω` (rad/s) |
-| `linear_speed_mps` | `0.15` | Kecepatan maju robot `v` (m/s) |
-| `wheel_separation_m` | `0.30` | Jarak pusat roda kiri-kanan `b` (m), ukur robot |
+| `linear_speed_mps` | `0.024` | Kecepatan maju robot `v` (m/s) |
+| `wheel_diameter_m` | `0.15` | Diameter efektif roda (m) |
+| `wheel_separation_m` | `0.48` | Jarak pusat roda kiri-kanan `b` (m) |
+| `gear_ratio` | `30.0` | Rasio gearbox 30:1 |
+| `encoder_pulses_per_motor_rev` | `30` | Pulsa encoder per putaran poros motor |
+| `encoder_pulses_per_wheel_rev` | `900` | Pulsa per putaran roda (30 × 30) |
 | `max_angular_speed_radps` | `1.0` | Batas nilai absolut `ω` |
 | `max_wheel_speed_mps` | `0.30` | Skala perkiraan untuk memetakan kecepatan roda ke PWM |
 | `publish_rate_hz` | `30.0` | Frekuensi pemrosesan kamera |
 
-`wheel_separation_m` perlu diukur pada robot. `max_wheel_speed_mps` adalah
-perkiraan, bukan kalibrasi otomatis. Tuning PID dan kecepatan sebaiknya dimulai
-dengan nilai rendah.
+Nilai `wheel_diameter_m` (15 cm) dan `wheel_separation_m` (48 cm) sudah diukur
+pada robot. Rincian dan prosedur kalibrasi ada di
+[`docs/hardware.md`](docs/hardware.md). `max_wheel_speed_mps` masih perkiraan,
+bukan kalibrasi otomatis. Tuning PID dan kecepatan sebaiknya dimulai dengan nilai
+rendah.
 
 ## Menjalankan sistem
 
@@ -196,10 +203,12 @@ ros2 topic echo /motor_pwm
 
 - Jika garis tidak ditemukan, node mengirim perintah berhenti. Frame kamera
   yang gagal dibaca dilewati.
-- Kecepatan roda negatif dipotong menjadi PWM nol; firmware belum mengubah
-  arah motor dari target kinematika.
-- Encoder firmware menghitung RPM untuk log, tetapi belum mengirimkannya ke ROS
-  atau menghitung odometri. Posisi `(x, y, θ)` belum tersedia.
+- ROS masih memotong kecepatan roda negatif menjadi PWM nol. Firmware sudah
+  mendukung PWM bertanda (negatif = mundur), tetapi nilainya belum dikirim oleh
+  node.
+- Encoder firmware menghitung RPM roda bertanda (arah diinferensi dari pin
+  `DIR`) dan kecepatan linier untuk log, tetapi belum mengirimkannya ke ROS atau
+  menghitung odometri. Posisi `(x, y, θ)` belum tersedia.
 - `/line_tracker/wheel_speeds` adalah target hasil perhitungan, bukan pengukuran
   kecepatan aktual roda.
 
@@ -235,6 +244,7 @@ ros2 topic echo /motor_pwm
 
 - [Checklist tahapan pengembangan](docs/checklist.md)
 - [Roadmap tahapan pengembangan](docs/roadmap.md)
+- [Hardware, satuan, dan kalibrasi](docs/hardware.md)
 - [Protokol serial](docs/serial_protocol.md)
 - [Panduan firmware](firmware/README.md)
 - [Panduan paket ROS 2](ros2_ws/src/line_tracker_ros2/README.md)
