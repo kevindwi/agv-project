@@ -2,23 +2,42 @@
 #include "config.h"
 
 SpeedMonitor::SpeedMonitor(Motor &right, Motor &left)
-    : _right(right), _left(left), _lastReadTime(0) {}
+    : _right(right), _left(left), _lastUpdateTime(0) {}
+
+void SpeedMonitor::reset() {
+  _lastUpdateTime = millis();
+  _right.getAndResetPulses();
+  _left.getAndResetPulses();
+}
 
 void SpeedMonitor::update() {
-  unsigned long now = millis();
-  if (now - _lastReadTime < SPEED_READ_INTERVAL_MS)
+  unsigned long currentTime = millis();
+  unsigned long elapsedMs = currentTime - _lastUpdateTime;
+  if (elapsedMs < SPEED_READ_INTERVAL_MS)
     return;
-  _lastReadTime = now;
 
-  unsigned long rPulses = _right.getAndResetPulses();
-  unsigned long lPulses = _left.getAndResetPulses();
+  _lastUpdateTime = currentTime;
 
-  float intervalSec = SPEED_READ_INTERVAL_MS / 1000.0f;
-  float rRpm = (rPulses / intervalSec / PULSES_PER_REV) * 60.0f;
-  float lRpm = (lPulses / intervalSec / PULSES_PER_REV) * 60.0f;
+  long rPulses = _right.getAndResetPulses();
+  long lPulses = _left.getAndResetPulses();
 
-  Serial.print("R RPM: ");
-  Serial.print(rRpm / 30.0f);
-  Serial.print("  |  L RPM: ");
-  Serial.println(lRpm / 30.0f);
+  // Pulsa per detik -> putaran roda per menit (900 pulsa/putaran roda).
+  float intervalSec = elapsedMs / 1000.0f;
+  float rWheelRpm = (rPulses / intervalSec / PULSES_PER_WHEEL_REV) * 60.0f;
+  float lWheelRpm = (lPulses / intervalSec / PULSES_PER_WHEEL_REV) * 60.0f;
+
+  // RPM roda -> kecepatan linier (m/s), positif maju, negatif mundur.
+  float wheelCircumference = PI * WHEEL_DIAMETER_M;
+  float rLinearSpeed = wheelCircumference * (rWheelRpm / 60.0f);
+  float lLinearSpeed = wheelCircumference * (lWheelRpm / 60.0f);
+
+  Serial.print("R: ");
+  Serial.print(rWheelRpm, 2);
+  Serial.print(" rpm, ");
+  Serial.print(rLinearSpeed, 4);
+  Serial.print(" m/s | L: ");
+  Serial.print(lWheelRpm, 2);
+  Serial.print(" rpm, ");
+  Serial.print(lLinearSpeed, 4);
+  Serial.println(" m/s");
 }

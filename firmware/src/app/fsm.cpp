@@ -2,10 +2,20 @@
 #include "Arduino.h"
 #include "config.h"
 
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
 FSM::FSM(Motor &right, Motor &left)
-    : _right(right), _left(left), _state(AgvState::IDLE), _stateStartTime(0),
-      _lastCommandTime(0), _rightSpeed(0), _leftSpeed(0),
-      _commandTimedOut(false) {}
+    : _right(right), _left(left),
+      _leftPid(WHEEL_PID_KP, WHEEL_PID_KI, WHEEL_PID_KD,
+               WHEEL_PID_MAX_INTEGRAL),
+      _rightPid(WHEEL_PID_KP, WHEEL_PID_KI, WHEEL_PID_KD,
+                WHEEL_PID_MAX_INTEGRAL),
+      _state(AgvState::IDLE), _stateStartTime(0), _lastCommandTime(0),
+      _lastControlTime(0),
+      _targetLeftTicks(0.0f), _targetRightTicks(0.0f), _commandTimedOut(false) {
+}
 
 void FSM::begin() { changeState(AgvState::IDLE); }
 
@@ -45,86 +55,138 @@ void FSM::changeState(AgvState newState) {
   _state = newState;
   _stateStartTime = millis();
 
+  if (newState != AgvState::MOVING) {
+    _targetLeftTicks = 0.0f;
+    _targetRightTicks = 0.0f;
+    _leftPid.reset();
+    _rightPid.reset();
+    stopMotors();
+  } else {
+    // Tunggu perintah baru setelah tombol START ditekan.
+    _lastCommandTime = 0;
+    _lastControlTime = millis();
+  }
+
   SERIAL_DEBUG.print("STATE CHANGE --> ");
   SERIAL_DEBUG.println(stateName());
 
-  if (_state == AgvState::ESTOP || _state == AgvState::ERROR) {
-    stopMotors();
-  }
 }
 
 void FSM::handleSerial() {
-
-  static char buf[16];
-  static byte idx = 0;
+  static char buffer[48];
+  static byte index = 0;
+  static bool discardLine = false;
 
   while (SERIAL_COMM.available() > 0) {
-    char rc = SERIAL_COMM.read();
+    char c = SERIAL_COMM.read();
 
-    if (rc == '\n') {
-      buf[idx] = '\0';
-
-      // Kontrak frame: "<left_pwm>,<right_pwm>\n" (lihat docs/serial_protocol.md)
-      int leftSpeed = 0;
-      int rightSpeed = 0;
-      bool valid = false;
-
-      char *token = strtok(buf, ",");
-      if (token != NULL) {
-        leftSpeed = atoi(token);
-        token = strtok(NULL, ",");
-        if (token != NULL) {
-          rightSpeed = atoi(token);
-          valid = true;
-        }
+    if (c == '\n') {
+      if (!discardLine) {
+        buffer[index] = '\0';
+        parseCommand(buffer);
       }
-
-      if (valid) {
-        _leftSpeed = leftSpeed;
-        _rightSpeed = rightSpeed;
-        _lastCommandTime = millis();
-
-        SERIAL_DEBUG.print("R: ");
-        SERIAL_DEBUG.print(_rightSpeed);
-        SERIAL_DEBUG.print(" | L: ");
-        SERIAL_DEBUG.println(_leftSpeed);
+      index = 0;
+      discardLine = false;
+    } else if (c != '\r') {
+      if (index < sizeof(buffer) - 1) {
+        buffer[index++] = c;
       } else {
-        SERIAL_DEBUG.println("Frame serial tidak valid, diabaikan");
+        // Abaikan seluruh frame yang terlalu panjang sampai newline.
+        discardLine = true;
       }
-
-      idx = 0;
-    } else if (rc != '\r' && idx < sizeof(buf) - 1) {
-      buf[idx++] = rc;
     }
   }
 }
 
-void FSM::update() {
-  switch (_state) {
-  case AgvState::IDLE:
-    stopMotors();
-    break;
+void FSM::parseCommand(char *line) {
+  if (line[0] != 'C' || line[1] != ',') {
+    return;
+  }
 
-  case AgvState::MOVING: {
-    // Failsafe: bila tak ada frame valid selama timeout, hentikan motor.
-    if (commandTimedOut()) {
-      if (!_commandTimedOut) {
-        _commandTimedOut = true;
-        SERIAL_DEBUG.println("Timeout perintah serial, motor berhenti");
-      }
-      stopMotors();
-      break;
+  char *linearText = line + 2;
+  char *comma = strchr(linearText, ',');
+  if (comma == nullptr) {
+    return;
+  }
+
+  *comma = '\0';
+  char *endLinear;
+  char *endAngular;
+
+  // AVR libc menyediakan strtod; strtof tidak tersedia pada toolchain ini.
+  float linear = (float)strtod(linearText, &endLinear);
+  float angular = (float)strtod(comma + 1, &endAngular);
+
+  if (endLinear == linearText || endAngular == comma + 1 ||
+      *endLinear != '\0' || *endAngular != '\0' ||
+      !isfinite(linear) || !isfinite(angular)) {
+    return;
+  }
+
+  const float leftMps = linear - angular * WHEEL_SEPARATION_M / 2.0f;
+  const float rightMps = linear + angular * WHEEL_SEPARATION_M / 2.0f;
+
+  const float dt = CONTROL_PERIOD_MS / 1000.0f;
+  const float metersPerTick =
+      (PI * WHEEL_DIAMETER_M) / PULSES_PER_WHEEL_REV;
+
+  _targetLeftTicks = leftMps * dt / metersPerTick;
+  _targetRightTicks = rightMps * dt / metersPerTick;
+  _lastCommandTime = millis();
+}
+
+void FSM::update() {
+  if (_state != AgvState::MOVING) {
+    stopMotors();
+
+    // Buang pulsa saat diam agar tidak masuk ke siklus berikutnya.
+    _left.getAndResetPulses();
+    _right.getAndResetPulses();
+    return;
+  }
+
+  if (commandTimedOut()) {
+    if (!_commandTimedOut) {
+      _commandTimedOut = true;
+      SERIAL_DEBUG.println("Timeout perintah serial, motor berhenti");
     }
 
-    _commandTimedOut = false;
-    _right.set(DIR_CW, _rightSpeed);
-    _left.set(DIR_CCW, _leftSpeed);
-    break;
+    stopMotors();
+    _leftPid.reset();
+    _rightPid.reset();
+    _left.getAndResetPulses();
+    _right.getAndResetPulses();
+    _lastControlTime = millis();
+    return;
   }
 
-  case AgvState::ERROR:
-  case AgvState::ESTOP:
-    stopMotors();
-    break;
+  const unsigned long now = millis();
+  const unsigned long elapsedMs = now - _lastControlTime;
+
+  if (elapsedMs < CONTROL_PERIOD_MS) {
+    return;
   }
+
+  _lastControlTime = now;
+  _commandTimedOut = false;
+
+  const float dt = elapsedMs / 1000.0f;
+
+  // Ambil pulsa sekali. Nilai ini dipakai PID dan telemetri.
+  const long leftTicks = _left.getAndResetPulses();
+  const long rightTicks = _right.getAndResetPulses();
+
+  const int leftPwm =
+      (int)_leftPid.compute(_targetLeftTicks, (float)leftTicks, dt);
+  const int rightPwm =
+      (int)_rightPid.compute(_targetRightTicks, (float)rightTicks, dt);
+
+  _left.set(leftPwm);
+  _right.set(rightPwm);
+
+  // Format balasan: E,<delta_kiri>,<delta_kanan>
+  SERIAL_COMM.print("E,");
+  SERIAL_COMM.print(leftTicks);
+  SERIAL_COMM.print(",");
+  SERIAL_COMM.println(rightTicks);
 }

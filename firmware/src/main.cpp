@@ -4,23 +4,21 @@
 #include "config.h"
 #include "fsm.h"
 #include "motor.h"
-#include "speed.h"
 
 // Globals
-Motor motorRight(R_START_STOP, R_RUN_BRAKE, R_DIR, R_INT_VR, R_PWM,
-                 R_SPEED_OUT);
-Motor motorLeft(L_START_STOP, L_RUN_BRAKE, L_DIR, L_INT_VR, L_PWM, L_SPEED_OUT);
+Motor motorRight(R_START_STOP, R_RUN_BRAKE, R_DIR, R_INT_VR, R_PWM, R_SPEED_OUT,
+                 DIR_CW);
+Motor motorLeft(L_START_STOP, L_RUN_BRAKE, L_DIR, L_INT_VR, L_PWM, L_SPEED_OUT,
+                DIR_CCW);
 FSM fsm(motorRight, motorLeft);
-SpeedMonitor speedMonitor(motorRight, motorLeft);
 
 void handleButtons();
 
 // Button states
 bool eStopActive = false;
 
-// Speed reading
-unsigned long lastSpeedReadTime = 0;
-unsigned long currentTime;
+// State sebelumnya, untuk mendeteksi transisi ke MOVING.
+AgvState previousState = AgvState::IDLE;
 
 // Button
 Button startStopBtn, resetBtn, eStopBtn;
@@ -46,10 +44,6 @@ void loop() {
 
   fsm.handleSerial();
   fsm.update();
-
-  if (fsm.isMoving()) {
-    speedMonitor.update();
-  }
 }
 
 void handleButtons() {

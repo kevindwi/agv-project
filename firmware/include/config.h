@@ -39,8 +39,15 @@
 #define OBSTACLE_TIMEOUT_MS 5000
 
 // BACA KECEPATAN ENCODER
+// Encoder: 30 pulsa/putaran poros motor, gearbox 30:1
+// -> 900 pulsa per putaran roda (PULSES_PER_REV x GEAR_RATIO).
 #define SPEED_READ_INTERVAL_MS 1000
 #define PULSES_PER_REV 30
+#define GEAR_RATIO 30
+#define PULSES_PER_WHEEL_REV (PULSES_PER_REV * GEAR_RATIO)
+
+// RODA
+#define WHEEL_DIAMETER_M 0.15f
 
 // PWM TASK
 #define MOVING_PWM 20
@@ -49,3 +56,13 @@
 // TIMEOUT PERINTAH SERIAL
 // Motor berhenti bila tidak ada frame valid selama >= nilai ini.
 #define SERIAL_COMMAND_TIMEOUT_MS 500
+
+// Titik awal. Sesuaikan berdasarkan pengujian roda.
+#define WHEEL_PID_KP 20.0f
+#define WHEEL_PID_KI 0.0f
+#define WHEEL_PID_KD 0.0f
+#define WHEEL_PID_MAX_INTEGRAL 20.0f
+
+#define WHEEL_SEPARATION_M 0.48f
+// Interval kontrol lebih panjang agar encoder 900 tick/rev terbaca stabil.
+#define CONTROL_PERIOD_MS 100
