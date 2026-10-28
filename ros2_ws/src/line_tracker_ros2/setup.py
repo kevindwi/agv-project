@@ -31,6 +31,7 @@ setup(
     entry_points={
         'console_scripts': [
             'line_tracker_node = line_tracker_ros2.line_tracker_node:main',
+            'odometry_node = line_tracker_ros2.odometry_node:main',
         ],
     },
 )

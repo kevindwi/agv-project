@@ -58,7 +58,7 @@
 #define SERIAL_COMMAND_TIMEOUT_MS 500
 
 // Titik awal. Sesuaikan berdasarkan pengujian roda.
-#define WHEEL_PID_KP 20.0f
+#define WHEEL_PID_KP 0.2f
 #define WHEEL_PID_KI 0.0f
 #define WHEEL_PID_KD 0.0f
 #define WHEEL_PID_MAX_INTEGRAL 20.0f

@@ -1,6 +1,6 @@
 line_tracker_node:
   ros__parameters:
-    camera_index: 1 # index perangkat V4L2
+    camera_index: 3 # index perangkat V4L2
     serial_port: /dev/ttyUSB0
     baud_rate: 115200
 
@@ -16,7 +16,21 @@ line_tracker_node:
     ki: 0.0
     kd: 0.0
 
-    linear_speed_mps: 0.024 # kecepatan maju robot (m/s) -> PWM ~20
+    linear_speed_mps: 0.30 # kecepatan maju robot (m/s) -> PWM ~20
     max_angular_speed_radps: 1.0 # batas kecepatan putar robot
     max_wheel_speed_mps: 0.30 # skala perkiraan untuk konversi ke PWM
     publish_rate_hz: 30.0 # frekuensi loop (setara FPS kamera)
+
+odometry_node:
+  ros__parameters:
+    # Kalibrasi DDMR: sinkron dengan nilai perangkat keras di atas.
+    wheel_diameter_m: 0.15
+    wheel_separation_m: 0.48
+    encoder_pulses_per_wheel_rev: 900
+    encoder_delta_topic: /line_tracker/encoder_delta
+    odom_topic: /odom
+    path_topic: /path
+    max_path_poses: 10000
+    path_publish_rate_hz: 2.0
+    odom_frame_id: odom
+    base_frame_id: base_link

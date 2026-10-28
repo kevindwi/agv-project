@@ -41,7 +41,15 @@ def launch_setup(context, *args, **kwargs):
         parameters=node_params,
     )
 
-    return [node]
+    odometry_node = Node(
+        package="line_tracker_ros2",
+        executable="odometry_node",
+        name="odometry_node",
+        output="screen",
+        parameters=[config_file],
+    )
+
+    return [node, odometry_node]
 
 
 def generate_launch_description():
