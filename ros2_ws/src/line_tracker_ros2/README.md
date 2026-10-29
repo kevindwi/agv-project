@@ -1,23 +1,22 @@
 # line_tracker_ros2
 
-Node ROS 2 untuk line tracking: membaca kamera, mendeteksi garis, menghitung
-koreksi PID, lalu mengirim PWM roda ke firmware AGV melalui serial.
+Package ROS 2 untuk sistem line tracking AGV: membaca kamera V4L2, mendeteksi garis menggunakan OpenCV, menghitung koreksi PID angular, mengirim perintah kecepatan `/cmd_vel` ke firmware via serial, serta mengintegrasikan delta encoder menjadi odometri global `/odom` dan visualisasi jejak `/path`.
 
 ## Struktur package
 
-```
+```text
 line_tracker_ros2/
 ├── line_tracker_ros2/
 │   ├── __init__.py
-│   ├── line_tracker_node.py   # wiring: parameter -> kamera -> PID -> serial
-│   ├── odometry_node.py       # delta encoder -> /odom + TF odom/base_link
-│   ├── camera.py              # buka kamera + deteksi garis (ROI)
-│   ├── pid.py                 # PIDController
-│   └── serial_bridge.py       # kirim PWM ke firmware
+│   ├── line_tracker_node.py   # loop kontrol: kamera -> PID garis -> publish /cmd_vel & bridge serial
+│   ├── odometry_node.py       # delta encoder -> /odom + TF odom/base_link + /path
+│   ├── camera.py              # akuisisi kamera V4L2 + deteksi kontur garis (ROI)
+│   ├── pid.py                 # kontroler PID diskrit
+│   └── serial_bridge.py       # protokol serial dua arah C/E (cmd_vel & encoder delta)
 ├── config/
-│   └── line_tracker.yaml      # PID, parameter DDMR, dan port
+│   └── line_tracker.yaml      # kalibrasi DDMR fisik, PID, dan konfigurasi serial
 ├── launch/
-│   └── line_tracker.launch.py
+│   └── line_tracker.launch.py # launch line_tracker_node dan odometry_node
 ├── resource/                  # ament index
 ├── test/
 ├── package.xml
@@ -27,63 +26,81 @@ line_tracker_ros2/
 
 ## Parameter
 
+Didefinisikan di [`config/line_tracker.yaml`](config/line_tracker.yaml):
+
+### `line_tracker_node`
+
 | Parameter | Default | Keterangan |
 | --- | --- | --- |
-| `camera_index` | `2` | index perangkat kamera V4L2 |
-| `serial_port` | `/dev/ttyUSB0` | port ke firmware |
-| `baud_rate` | `115200` | baud serial |
-| `kp`, `ki`, `kd` | `1.0, 0.0, 0.0` | gain PID; tuning memengaruhi `angular.z` (rad/s) |
-| `linear_speed_mps` | `0.15` | kecepatan maju robot (m/s) |
-| `wheel_separation_m` | `0.30` | jarak antara pusat roda kiri dan kanan (m), ukur pada robot |
-| `max_angular_speed_radps` | `1.0` | batas kecepatan putar robot (rad/s) |
-| `max_wheel_speed_mps` | `0.30` | skala perkiraan untuk memetakan kecepatan roda ke PWM |
-| `publish_rate_hz` | `30.0` | frekuensi loop |
+| `camera_index` | `3` | Indeks perangkat kamera V4L2 (`/dev/videoN`) |
+| `serial_port` | `/dev/ttyUSB0` | Port UART adapter ke `Serial1` Arduino Mega |
+| `baud_rate` | `115200` | Baud rate komunikasi serial |
+| `wheel_diameter_m` | `0.15` | Diameter efektif roda (15 cm) |
+| `wheel_separation_m` | `0.48` | Jarak pusat roda kiri-kanan (48 cm) |
+| `gear_ratio` | `30.0` | Rasio gearbox 30:1 |
+| `encoder_pulses_per_wheel_rev` | `900` | Resolusi encoder per putaran roda |
+| `kp`, `ki`, `kd` | `1.0, 0.0, 0.0` | Gain PID pengarah garis (`angular.z` rad/s) |
+| `linear_speed_mps` | `0.30` | Kecepatan maju nominal robot (m/s) |
+| `max_angular_speed_radps` | `1.0` | Batas kecepatan putar robot (rad/s) |
+| `publish_rate_hz` | `30.0` | Frekuensi loop deteksi dan kontrol (Hz) |
+
+### `odometry_node`
+
+| Parameter | Default | Keterangan |
+| --- | --- | --- |
+| `wheel_diameter_m` | `0.15` | Diameter efektif roda (m) |
+| `wheel_separation_m` | `0.48` | Jarak pusat roda kiri-kanan (m) |
+| `encoder_pulses_per_wheel_rev` | `900` | Pulsa per putaran roda |
+| `encoder_delta_topic` | `/line_tracker/encoder_delta` | Topik masukan delta pulsa |
+| `odom_topic` | `/odom` | Topik keluaran odometri |
+| `path_topic` | `/path` | Topik keluaran jejak lintasan RViz |
+| `max_path_poses` | `10000` | Batas riwayat pose jejak lintasan |
+| `path_publish_rate_hz` | `2.0` | Frekuensi publikasi jejak ke `/path` (Hz) |
+| `odom_frame_id` | `odom` | Nama frame referensi odometri |
+| `base_frame_id` | `base_link` | Nama frame base robot |
 
 ## Topik
 
 | Topik | Tipe | Keterangan |
 | --- | --- | --- |
-| `/line_tracker/debug_image` | `sensor_msgs/Image` | frame debug (untuk `rqt_image_view`) |
-| `/line_tracker/normalized_error` | `std_msgs/Float64` | error posisi garis ternormalisasi |
-| `/motor_pwm` | `std_msgs/Int32MultiArray` | `[left_pwm, right_pwm]` |
-| `/line_tracker/wheel_speeds` | `std_msgs/Float64MultiArray` | target kinematika `[v_left, v_right]` dalam m/s |
-| `/cmd_vel` | `geometry_msgs/Twist` | kecepatan robot: m/s dan rad/s |
-| `/line_tracker/encoder_delta` | `std_msgs/Int64MultiArray` | delta tick `[left, right]` dari serial |
-| `/odom` | `nav_msgs/Odometry` | pose dan kecepatan odometri dalam frame `odom` |
-| `/path` | `nav_msgs/Path` | jejak pose robot di frame `odom` untuk RViz |
+| `/line_tracker/debug_image` | `sensor_msgs/Image` | Frame debug dengan overlay ROI dan posisi garis |
+| `/cmd_vel` | `geometry_msgs/Twist` | Perintah kecepatan robot (`linear.x` m/s, `angular.z` rad/s) |
+| `/line_tracker/encoder_delta` | `std_msgs/Int64MultiArray` | Delta tick `[left, right]` dari telemetri serial firmware |
+| `/odom` | `nav_msgs/Odometry` | Estimasi pose $(x, y, \theta)$ dan twist robot dalam frame `odom` |
+| `/path` | `nav_msgs/Path` | Jejak pose robot di frame `odom` untuk RViz |
 
-Launch menjalankan `line_tracker_node` dan `odometry_node`. Node line tracker
-meneruskan delta encoder, sedangkan node odometri mengintegrasikan perpindahan
-global dan menerbitkan TF `odom -> base_link`. Parameter dimensi roda, CPR,
-topik, dan nama frame berada pada bagian `odometry_node` di YAML.
+## Visualisasi & Monitoring
 
-Untuk melihat jejak di RViz, jalankan sistem dan `rviz2`, set **Fixed Frame**
-ke `odom`, lalu pilih **Add → By topic → `/path` → Path**. Tambahkan juga
-**TF** jika ingin melihat sumbu frame robot. Panjang riwayat dibatasi oleh
-`max_path_poses` (default 10.000 pose); `/path` diterbitkan 2 kali per detik
-secara default.
+Launch file secara otomatis menjalankan `line_tracker_node` dan `odometry_node`:
 
-Gambar kamera debug (frame dengan overlay ROI dan posisi garis) diterbitkan pada
-`/line_tracker/debug_image`. Lihat dengan `rqt_image_view` dan pilih topik itu.
+```bash
+ros2 launch line_tracker_ros2 line_tracker.launch.py
+```
 
-PID mengubah error garis menjadi kecepatan putar `angular.z`. Kinematika balik
-DDMR menghitung kecepatan roda dari `linear.x` dan `angular.z`. Firmware saat
-ini tetap menerima PWM positif, sehingga pemetaan ke PWM masih berupa skala
-perkiraan; target kecepatan encoder dan gerak roda mundur belum diterapkan.
+- Untuk melihat overlay deteksi kamera:
+  ```bash
+  ros2 run rqt_image_view rqt_image_view
+  ```
+  Pilih topik `/line_tracker/debug_image`.
 
-## Build & jalankan
+- Untuk melihat pose robot, frame koordinat TF, dan jejak perpindahan lintasan:
+  ```bash
+  rviz2 -d ros2_ws/line_tracker.rviz
+  ```
+  Atau atur **Fixed Frame** ke `odom`, tambahkan display **TF**, **Odometry** (`/odom`), dan **Path** (`/path`).
+
+## Build & Jalankan
 
 ```bash
 cd ros2_ws
-colcon build
+colcon build --symlink-install
 source install/setup.bash
 
-# via launch + config
+# Menjalankan via launch file
 ros2 launch line_tracker_ros2 line_tracker.launch.py
 
-# atau langsung
-ros2 run line_tracker_ros2 line_tracker_node --ros-args \
-  -p serial_port:=/dev/ttyUSB0
+# Atau override parameter via CLI
+ros2 launch line_tracker_ros2 line_tracker.launch.py camera_index:=2 serial_port:=/dev/ttyUSB0
 ```
 
 Protokol serial: [`../../../docs/serial_protocol.md`](../../../docs/serial_protocol.md).

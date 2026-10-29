@@ -16,6 +16,8 @@ sudah diuji pada robot fisik; validasi hardware ditandai terpisah.
 - [x] Mengirim `C,<linear_x>,<angular_z>` melalui serial ke firmware.
 - [x] Menerima delta encoder `E,<left_ticks>,<right_ticks>` dari firmware.
 - [x] Meneruskan delta encoder dari line tracker ke topik `/line_tracker/encoder_delta`.
+- [x] Menghitung estimasi odometri DDMR global $(x, y, \theta)$ dan menerbitkan topik `/odom`, TF `odom -> base_link`, serta `/path` (`odometry_node`).
+- [x] Menyediakan konfigurasi visualisasi RViz (`ros2_ws/line_tracker.rviz`).
 - [ ] Memvalidasi arah belok dan semua satuan pada robot fisik.
 
 ## Masalah terbuka (known issues)

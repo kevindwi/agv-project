@@ -9,29 +9,43 @@ ROS 2, dan firmware Arduino Mega 2560.
 Kamera
   │ frame
   ▼
-ROS 2: OpenCV mendeteksi garis → PID menghitung kecepatan putar ω
-  │ perintah v dan ω
+ROS 2: OpenCV mendeteksi garis → PID garis menghitung kecepatan putar ω
+  │ perintah v dan ω (/cmd_vel)
   ▼
-Kinematika balik DDMR: vL = v - (bω/2), vR = v + (bω/2)
-  │ kecepatan roda dipetakan ke PWM (perkiraan)
+Serial UART: C,<linear_x>,<angular_z>\n
+  │
   ▼
-Serial UART → firmware Arduino → driver motor
-                              │
-                              └─ encoder dibaca dan RPM dicetak untuk debug
+Firmware Arduino Mega:
+  │ Kinematika balik DDMR: vL = v - (bω/2), vR = v + (bω/2)
+  │ Target ticks dihitung per siklus kontrol (100 ms)
+  │ Loop PID per roda → sinyal PWM bertanda & DIR → driver motor
+  │
+  └─ Membaca delta tick encoder dan mengirim balik: E,<left_ticks>,<right_ticks>\n
+  │
+  ▼
+ROS 2:
+  │ /line_tracker/encoder_delta
+  ▼
+odometry_node:
+  │ Mengintegrasikan tick menjadi pose global (x, y, θ)
+  ▼
+Topik /odom, TF odom -> base_link, dan /path untuk visualisasi RViz
 ```
 
-Node ROS menerbitkan gambar debug, perintah gerak, dan target kecepatan roda.
-Firmware saat ini menerima PWM, bukan target kecepatan roda. Encoder belum
-dipakai untuk odometri, sehingga posisi `(x, y, θ)` belum dihitung atau
-diterbitkan.
+Node `line_tracker_node` menerbitkan gambar debug, perintah `/cmd_vel`, dan
+meneruskan delta encoder ke `/line_tracker/encoder_delta`. Node `odometry_node`
+mengintegrasikan delta pulsa encoder menjadi posisi dan orientasi global
+`(x, y, θ)` pada `/odom` serta menyiarkan TF dan jejak lintasan `/path`.
 
 ## Struktur proyek
 
 ```text
-firmware/                         Firmware PlatformIO untuk Arduino Mega
-ros2_ws/src/line_tracker_ros2/    Node kamera, PID, DDMR, dan serial
-docs/hardware.md                  Parameter fisik, konvensi, dan kalibrasi
-docs/serial_protocol.md           Kontrak komunikasi serial
+firmware/                         Firmware PlatformIO untuk Arduino Mega 2560
+ros2_ws/src/line_tracker_ros2/    Package ROS 2 (line_tracker_node & odometry_node)
+docs/checklist.md                 Checklist pengembangan proyek
+docs/hardware.md                  Parameter fisik, konvensi, pinout, dan kalibrasi
+docs/roadmap.md                   Roadmap tahapan pengembangan menuju pameran
+docs/serial_protocol.md           Kontrak komunikasi serial dua arah ROS ↔ MCU
 ```
 
 ## Perangkat yang diperlukan
@@ -102,7 +116,8 @@ Jika ada beberapa board, pilih port secara eksplisit:
 pio run -t upload --upload-port /dev/ttyACM0
 ```
 
-Firmware menerima `<left_pwm>,<right_pwm>\n` pada `Serial1`. Lihat
+Firmware menerima perintah kecepatan `C,<linear_x>,<angular_z>\n` pada `Serial1`
+dan membalas delta ticks `E,<left_ticks>,<right_ticks>\n`. Lihat
 [protokol serial](docs/serial_protocol.md) untuk detailnya.
 
 ## Build ROS 2
@@ -181,36 +196,36 @@ garis tengah, dan centroid, jalankan:
 ros2 run rqt_image_view rqt_image_view
 ```
 
-Pilih `/line_tracker/debug_image`. Untuk memantau keluaran numerik:
+Pilih `/line_tracker/debug_image`. Untuk memantau keluaran numerik dan odometri:
 
 ```bash
 ros2 topic list
-ros2 topic echo /line_tracker/normalized_error
 ros2 topic echo /cmd_vel
-ros2 topic echo /line_tracker/wheel_speeds
-ros2 topic echo /motor_pwm
+ros2 topic echo /line_tracker/encoder_delta
+ros2 topic echo /odom
+ros2 topic echo /path
+```
+
+Untuk visualisasi odometri dan jejak robot di RViz:
+
+```bash
+rviz2 -d ros2_ws/line_tracker.rviz
 ```
 
 | Topik | Tipe | Isi |
 | --- | --- | --- |
-| `/line_tracker/debug_image` | `sensor_msgs/Image` | Frame debug kamera |
-| `/line_tracker/normalized_error` | `std_msgs/Float64` | Error posisi garis ternormalisasi |
-| `/cmd_vel` | `geometry_msgs/Twist` | `linear.x` (m/s), `angular.z` (rad/s) |
-| `/line_tracker/wheel_speeds` | `std_msgs/Float64MultiArray` | `[v_kiri, v_kanan]` (m/s) |
-| `/motor_pwm` | `std_msgs/Int32MultiArray` | `[PWM_kiri, PWM_kanan]` (0–255) |
+| `/line_tracker/debug_image` | `sensor_msgs/Image` | Frame debug kamera (overlay ROI dan garis) |
+| `/cmd_vel` | `geometry_msgs/Twist` | Perintah kecepatan: `linear.x` (m/s), `angular.z` (rad/s) |
+| `/line_tracker/encoder_delta` | `std_msgs/Int64MultiArray` | Delta tick `[left, right]` dari serial firmware |
+| `/odom` | `nav_msgs/Odometry` | Estimasi pose $(x, y, \theta)$ dan twist robot di frame `odom` |
+| `/path` | `nav_msgs/Path` | Riwayat jejak perpindahan posisi robot untuk RViz |
 
 ## Batas implementasi saat ini
 
-- Jika garis tidak ditemukan, node mengirim perintah berhenti. Frame kamera
-  yang gagal dibaca dilewati.
-- ROS masih memotong kecepatan roda negatif menjadi PWM nol. Firmware sudah
-  mendukung PWM bertanda (negatif = mundur), tetapi nilainya belum dikirim oleh
-  node.
-- Encoder firmware menghitung RPM roda bertanda (arah diinferensi dari pin
-  `DIR`) dan kecepatan linier untuk log, tetapi belum mengirimkannya ke ROS atau
-  menghitung odometri. Posisi `(x, y, θ)` belum tersedia.
-- `/line_tracker/wheel_speeds` adalah target hasil perhitungan, bukan pengukuran
-  kecepatan aktual roda.
+- Jika garis tidak ditemukan, node mengirim perintah berhenti (`linear.x = 0, angular.z = 0`). Frame kamera yang gagal dibaca dilewati.
+- Kontrol kecepatan loop tertutup PID firmware dan gain kalibrasi masih berupa nilai awal dan memerlukan validasi menyeluruh pada robot fisik di lantai.
+- Protokol serial belum dilengkapi checksum (CRC8/XOR); frame rusak karena derau kelistrikan motor belum terfilter secara otomatis.
+- Deteksi ArUco, peta rute graf lintasan, dan integrasi IoT masih dalam perencanaan/tahap pengembangan berikutnya (lihat `docs/roadmap.md`).
 
 ## Troubleshooting
 
