@@ -34,67 +34,67 @@ nodes:
     x: 4.0
     y: 0.0
 
-  CP3:
-    type: "checkpoint"
-    aruco_id: 30
-    label: "Titik Finish (CP3)"
-    x: 4.0
-    y: 2.0
-
-  INT3:
-    type: "intersection"
-    aruco_id: 3
-    label: "Persimpangan 3 (Loop balik)"
-    x: 6.0
-    y: 0.0
+#   CP3:
+#     type: "checkpoint"
+#     aruco_id: 30
+#     label: "Titik Finish (CP3)"
+#     x: 4.0
+#     y: 2.0
+#
+#   INT3:
+#     type: "intersection"
+#     aruco_id: 3
+#     label: "Persimpangan 3 (Loop balik)"
+#     x: 6.0
+#     y: 0.0
 
 # Definisi Edge (Segmen Garis antar Titik)
 # branch_action: "STRAIGHT", "LEFT", "RIGHT", atau "STOP" saat tiba di target node
 edges:
   - from: "CP1"
     to: "INT1"
-    distance_m: 2.0
-    speed_mps: 0.30
-    branch_action: "STRAIGHT"
+    # distance_m: 2.0
+    # speed_mps: 0.30
+    branch_action: "LEFT"
 
   - from: "INT1"
+    to: "INT2"
+    # distance_m: 2.0
+    # speed_mps: 0.20
+    branch_action: "RIGHT"
+
+  - from: "INT2"
     to: "CP2"
-    distance_m: 2.0
-    speed_mps: 0.20
+    # distance_m: 2.0
+    # speed_mps: 0.30
     branch_action: "RIGHT"
-
-  - from: "INT1"
-    to: "INT2"
-    distance_m: 2.0
-    speed_mps: 0.30
-    branch_action: "STRAIGHT"
-
-  - from: "CP2"
-    to: "INT1"
-    distance_m: 2.0
-    speed_mps: 0.20
-    branch_action: "LEFT"
-
-  - from: "INT2"
-    to: "CP3"
-    distance_m: 2.0
-    speed_mps: 0.20
-    branch_action: "LEFT"
-
-  - from: "INT2"
-    to: "INT3"
-    distance_m: 2.0
-    speed_mps: 0.30
-    branch_action: "STRAIGHT"
-
-  - from: "CP3"
-    to: "INT2"
-    distance_m: 2.0
-    speed_mps: 0.20
-    branch_action: "RIGHT"
-
-  - from: "INT3"
-    to: "CP1"
-    distance_m: 6.0
-    speed_mps: 0.30
-    branch_action: "STRAIGHT"
+#
+#   - from: "CP2"
+#     to: "INT1"
+#     distance_m: 2.0
+#     speed_mps: 0.20
+#     branch_action: "LEFT"
+#
+#   - from: "INT2"
+#     to: "CP3"
+#     distance_m: 2.0
+#     speed_mps: 0.20
+#     branch_action: "LEFT"
+#
+#   - from: "INT2"
+#     to: "INT3"
+#     distance_m: 2.0
+#     speed_mps: 0.30
+#     branch_action: "STRAIGHT"
+#
+#   - from: "CP3"
+#     to: "INT2"
+#     distance_m: 2.0
+#     speed_mps: 0.20
+#     branch_action: "RIGHT"
+#
+#   - from: "INT3"
+#     to: "CP1"
+#     distance_m: 6.0
+#     speed_mps: 0.30
+#     branch_action: "STRAIGHT"
