@@ -49,18 +49,47 @@ def launch_setup(context, *args, **kwargs):
         parameters=[config_file],
     )
 
-    return [node, odometry_node]
+    nodes = [node, odometry_node]
+
+    enable_mc = LaunchConfiguration("enable_mission_controller").perform(context).strip().lower()
+    if enable_mc in ("true", "1", "yes"):
+        map_file = LaunchConfiguration("map_file").perform(context)
+        mission_node = Node(
+            package="line_tracker_ros2",
+            executable="mission_controller_node",
+            name="mission_controller_node",
+            output="screen",
+            parameters=[{
+                "map_file": map_file,
+                "initial_node": "CP1",
+                "status_publish_rate_hz": 5.0,
+            }],
+        )
+        nodes.append(mission_node)
+
+    return nodes
 
 
 def generate_launch_description():
     package_share = get_package_share_directory("line_tracker_ros2")
     default_config_path = os.path.join(package_share, "config", "line_tracker.yaml")
+    default_map_path = os.path.join(package_share, "config", "track_graph.yaml")
 
     launch_args = [
         DeclareLaunchArgument(
             "config_file",
             default_value=default_config_path,
             description="Path ke file konfigurasi YAML",
+        ),
+        DeclareLaunchArgument(
+            "map_file",
+            default_value=default_map_path,
+            description="Path ke file peta graf lintasan (track_graph.yaml)",
+        ),
+        DeclareLaunchArgument(
+            "enable_mission_controller",
+            default_value="true",
+            description="Aktifkan mission_controller_node (true/false)",
         ),
         DeclareLaunchArgument(
             "camera_index",

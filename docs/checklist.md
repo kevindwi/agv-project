@@ -105,11 +105,11 @@ sudah diuji pada robot fisik; validasi hardware ditandai terpisah.
 
 ### 4A — Wajib untuk demo
 
-- [ ] `mission_controller_node` (state machine navigasi misi: `IDLE`, `NAVIGATING`, `AT_INTERSECTION`, `ARRIVED`, `PAUSED`, `ERROR`, `ESTOP`).
-- [ ] Definisikan format peta lintasan berbasis graf (YAML/JSON): node waypoint (CP1–CP3),
-  relasi edge, arah, batas kecepatan, instruksi percabangan, dan ID ArUco.
-- [ ] Buat Waypoint & Route Manager untuk menghasilkan rute sekuensial dari titik awal ke tujuan.
-- [ ] Buat unit test untuk validasi integritas struktur file peta (tidak ada waypoint yatim/loop buntu tak terdefinisi).
+- [x] `mission_controller_node` (state machine navigasi misi: `IDLE`, `NAVIGATING`, `AT_INTERSECTION`, `ARRIVED`, `PAUSED`, `ERROR`, `ESTOP`).
+- [x] Definisikan format peta lintasan berbasis graf (YAML/JSON): node waypoint (CP1–CP3),
+  relasi edge, arah, batas kecepatan, instruksi percabangan, dan ID ArUco (`config/track_graph.yaml`).
+- [x] Buat Waypoint & Route Manager untuk menghasilkan rute sekuensial dari titik awal ke tujuan (`route_manager.py`).
+- [x] Buat unit test untuk validasi integritas struktur file peta (tidak ada waypoint yatim/loop buntu tak terdefinisi) (`test_track_graph.py`).
 
 ### 4B — Refaktorisasi lanjutan (opsional, prioritas rendah)
 
@@ -120,9 +120,9 @@ sudah diuji pada robot fisik; validasi hardware ditandai terpisah.
 ## Tahap 5 — Navigasi line tracking percabangan di intersection
 
 - [ ] Implementasikan logika deselerasi saat odometri / ArUco mendeteksi robot mendekati persimpangan.
-- [ ] Implementasikan verifikasi ArUco di persimpangan yang sesuai dengan rute misi.
+- [x] Implementasikan verifikasi ArUco di persimpangan yang sesuai dengan rute misi (`mission_controller_node`).
 - [ ] Gunakan pose ArUco untuk mengoreksi akumulasi drift odometri (*checkpoint reset*).
-- [ ] Kembangkan logika pemilihan cabang (*branch switching*) pada kontur garis (belok kiri, lurus, atau belok kanan).
+- [x] Kembangkan logika pemilihan cabang (*branch switching*) pada kontur garis (belok kiri, lurus, atau belok kanan) di `camera.py` & `line_tracker_node`.
 - [ ] Implementasikan penguncian garis baru setelah menyelesaikan belokan di persimpangan.
 - [ ] Implementasikan penanganan kondisi gagal:
   - [ ] Garis hilang di luar persimpangan: robot berhenti seketika.

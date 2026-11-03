@@ -49,15 +49,34 @@ line_tracker_ros2/
 | `/line_tracker/debug_image` | `sensor_msgs/Image` | frame debug (untuk `rqt_image_view`, termasuk overlay ArUco) |
 | `/line_tracker/normalized_error` | `std_msgs/Float64` | error posisi garis ternormalisasi |
 | `/aruco/detected_id` | `std_msgs/Int32` | ID marker ArUco terkonfirmasi (waypoint / simpang) |
-| `/motor_pwm` | `std_msgs/Int32MultiArray` | `[left_pwm, right_pwm]` |
-| `/line_tracker/wheel_speeds` | `std_msgs/Float64MultiArray` | target kinematika `[v_left, v_right]` dalam m/s |
+| `/mission/command` | `std_msgs/String` | Perintah misi (mis. `go_to CP2`, `pause`, `resume`, `cancel`) |
+| `/mission/status` | `std_msgs/String` | Telemetri status FSM misi JSON (state, step, target, posisi) |
+| `/line_tracker/branch_instruction` | `std_msgs/String` | Instruksi pemilihan cabang (`LEFT`, `RIGHT`, `STRAIGHT`, `STOP`, `RESUME`) |
 | `/cmd_vel` | `geometry_msgs/Twist` | kecepatan robot: m/s dan rad/s |
 | `/line_tracker/encoder_delta` | `std_msgs/Int64MultiArray` | delta tick `[left, right]` dari serial |
 | `/odom` | `nav_msgs/Odometry` | pose dan kecepatan odometri dalam frame `odom` |
 | `/path` | `nav_msgs/Path` | jejak pose robot di frame `odom` untuk RViz |
 
-Launch menjalankan `line_tracker_node` dan `odometry_node`. Node line tracker
-meneruskan delta encoder, sedangkan node odometri mengintegrasikan perpindahan
+Launch file secara otomatis menjalankan `line_tracker_node`, `odometry_node`, dan `mission_controller_node`:
+
+```bash
+ros2 launch line_tracker_ros2 line_tracker.launch.py
+```
+
+Untuk mengirim perintah navigasi misi ke robot:
+```bash
+# Pergi ke Checkpoint 2
+ros2 topic pub --once /mission/command std_msgs/msg/String "{data: 'go_to CP2'}"
+
+# Jeda misi
+ros2 topic pub --once /mission/command std_msgs/msg/String "{data: 'pause'}"
+
+# Lanjutkan misi
+ros2 topic pub --once /mission/command std_msgs/msg/String "{data: 'resume'}"
+
+# Pantau telemetri misi
+ros2 topic echo /mission/status
+```
 global dan menerbitkan TF `odom -> base_link`. Parameter dimensi roda, CPR,
 topik, dan nama frame berada pada bagian `odometry_node` di YAML.
 

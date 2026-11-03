@@ -7,7 +7,7 @@ from geometry_msgs.msg import Twist
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import Int32, Int64MultiArray
+from std_msgs.msg import Int32, Int64MultiArray, String
 
 from .aruco import ArucoDetector
 from .camera import LineDetector
@@ -85,8 +85,33 @@ class LineTrackerNode(Node):
         self.encoder_delta_publisher = self.create_publisher(Int64MultiArray, "/line_tracker/encoder_delta", 10)
         self.aruco_id_publisher = self.create_publisher(Int32, "/aruco/detected_id", 10)
 
+        # Kontrol percabangan dan status misi
+        self.current_branch_action = "STRAIGHT"
+        self.branch_action_expire_time = 0.0
+        self.mission_stopped = False
+
+        self.branch_instruction_sub = self.create_subscription(
+            String, "/line_tracker/branch_instruction", self.branch_instruction_callback, 10
+        )
+
         self.timer = self.create_timer(1.0 / self.publish_rate_hz, self.timer_callback)
         self.get_logger().info("Line tracker & ArUco detector node aktif.")
+
+    def branch_instruction_callback(self, message: String):
+        """Terima instruksi belok di persimpangan atau perintah berhenti/jalan dari controller misi."""
+        action = message.data.strip().upper()
+        if action == "STOP":
+            self.mission_stopped = True
+            self._stop_motors()
+            self.get_logger().info("[BranchInstruction] Perintah STOP diterima. Motor berhenti.")
+        elif action == "RESUME":
+            self.mission_stopped = False
+            self.get_logger().info("[BranchInstruction] Perintah RESUME diterima. Melanjutkan line tracking.")
+        elif action in ("LEFT", "RIGHT", "STRAIGHT"):
+            self.current_branch_action = action
+            # Kunci pemilihan arah cabang selama 3.0 detik agar melewati persimpangan
+            self.branch_action_expire_time = time.time() + 3.0
+            self.get_logger().info(f"[BranchInstruction] Memilih percabangan: {action} (aktif selama 3.0 detik)")
 
     def timer_callback(self):
         delta = self.serial_bridge.read_encoder_delta()
@@ -99,7 +124,14 @@ class LineTrackerNode(Node):
         if frame is None:
             return
 
-        detection = self.line_detector.detect(frame)
+        now = time.time()
+
+        # Reset instruksi cabang kembali ke STRAIGHT jika batas waktu habis
+        if self.current_branch_action != "STRAIGHT" and now > self.branch_action_expire_time:
+            self.current_branch_action = "STRAIGHT"
+
+        # Deteksi garis dengan prioritas arah cabang aktif
+        detection = self.line_detector.detect(frame, branch_direction=self.current_branch_action)
 
         # Deteksi ArUco pada frame yang sama dan anotasikan ke debug image
         if self.aruco_enabled:
@@ -112,7 +144,11 @@ class LineTrackerNode(Node):
 
         self._publish_debug_image(detection.debug_image)
 
-        now = time.time()
+        # Jika misi sedang dalam status STOP (misal tiba di checkpoint atau di-pause)
+        if self.mission_stopped:
+            self._stop_motors()
+            return
+
         dt = now - self.last_time
         self.last_time = now
 

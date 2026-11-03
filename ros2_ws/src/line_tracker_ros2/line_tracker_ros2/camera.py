@@ -68,8 +68,8 @@ class LineDetector:
 
         return valid_contours, (x1, y1, x2, y2)
 
-    def detect(self, frame) -> LineDetection:
-        """Deteksi garis dengan Multi-ROI dan pemilihan jalur percabangan."""
+    def detect(self, frame, branch_direction: str = "STRAIGHT") -> LineDetection:
+        """Deteksi garis dengan Multi-ROI dan pemilihan jalur percabangan (Branch Switching)."""
         height, width, _ = frame.shape
         debug_image = frame.copy()
 
@@ -94,15 +94,19 @@ class LineDetector:
 
         image_center = (bounds_bot[2] - bounds_bot[0]) / 2.0
 
-        # Jika ada percabangan, ambil kontur dengan offset paling belok
+        # Pemilihan kontur saat ada percabangan (Branch Switching)
         if len(contours_bot) > 1:
-            def contour_offset(cnt):
+            def contour_center_x(cnt):
                 m = cv2.moments(cnt)
-                if m["m00"] == 0:
-                    return 0
-                return abs((m["m10"] / m["m00"]) - image_center)
+                return m["m10"] / m["m00"] if m["m00"] != 0 else image_center
 
-            selected_contour = max(contours_bot, key=contour_offset)
+            direction = branch_direction.upper()
+            if direction == "RIGHT":
+                selected_contour = max(contours_bot, key=contour_center_x)
+            elif direction == "LEFT":
+                selected_contour = min(contours_bot, key=contour_center_x)
+            else:  # "STRAIGHT"
+                selected_contour = min(contours_bot, key=lambda cnt: abs(contour_center_x(cnt) - image_center))
         else:
             selected_contour = contours_bot[0]
 
@@ -122,7 +126,7 @@ class LineDetector:
 
         if is_fork:
             cv2.putText(
-                debug_image, "PERCABANGAN DETECTED", (bounds_bot[0], bounds_bot[1] - 10),
+                debug_image, f"CABANG: {branch_direction}", (bounds_bot[0], bounds_bot[1] - 10),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2
             )
 

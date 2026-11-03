@@ -1,0 +1,100 @@
+# Peta Graf Lintasan AGV (Tahap 4A)
+# Menghubungkan Checkpoint (CP1, CP2, CP3) dan Persimpangan (INT1, INT2, INT3)
+
+version: "1.0"
+map_name: "UNESA_Demo_Track"
+
+# Definisi Node (Titik Waypoint & Persimpangan)
+nodes:
+  CP1:
+    type: "checkpoint"
+    aruco_id: 10
+    label: "Titik Muat / Start (CP1)"
+    x: 0.0
+    y: 0.0
+
+  INT1:
+    type: "intersection"
+    aruco_id: 1
+    label: "Persimpangan 1 (Pertigaan ke CP2)"
+    x: 2.0
+    y: 0.0
+
+  CP2:
+    type: "checkpoint"
+    aruco_id: 20
+    label: "Titik Bongkar (CP2)"
+    x: 2.0
+    y: 2.0
+
+  INT2:
+    type: "intersection"
+    aruco_id: 2
+    label: "Persimpangan 2 (Pertigaan ke CP3)"
+    x: 4.0
+    y: 0.0
+
+  CP3:
+    type: "checkpoint"
+    aruco_id: 30
+    label: "Titik Finish (CP3)"
+    x: 4.0
+    y: 2.0
+
+  INT3:
+    type: "intersection"
+    aruco_id: 3
+    label: "Persimpangan 3 (Loop balik)"
+    x: 6.0
+    y: 0.0
+
+# Definisi Edge (Segmen Garis antar Titik)
+# branch_action: "STRAIGHT", "LEFT", "RIGHT", atau "STOP" saat tiba di target node
+edges:
+  - from: "CP1"
+    to: "INT1"
+    distance_m: 2.0
+    speed_mps: 0.30
+    branch_action: "STRAIGHT"
+
+  - from: "INT1"
+    to: "CP2"
+    distance_m: 2.0
+    speed_mps: 0.20
+    branch_action: "RIGHT"
+
+  - from: "INT1"
+    to: "INT2"
+    distance_m: 2.0
+    speed_mps: 0.30
+    branch_action: "STRAIGHT"
+
+  - from: "CP2"
+    to: "INT1"
+    distance_m: 2.0
+    speed_mps: 0.20
+    branch_action: "LEFT"
+
+  - from: "INT2"
+    to: "CP3"
+    distance_m: 2.0
+    speed_mps: 0.20
+    branch_action: "LEFT"
+
+  - from: "INT2"
+    to: "INT3"
+    distance_m: 2.0
+    speed_mps: 0.30
+    branch_action: "STRAIGHT"
+
+  - from: "CP3"
+    to: "INT2"
+    distance_m: 2.0
+    speed_mps: 0.20
+    branch_action: "RIGHT"
+
+  - from: "INT3"
+    to: "CP1"
+    distance_m: 6.0
+    speed_mps: 0.30
+    branch_action: "STRAIGHT"
