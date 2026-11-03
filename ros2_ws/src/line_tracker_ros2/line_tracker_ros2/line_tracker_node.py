@@ -7,8 +7,9 @@ from geometry_msgs.msg import Twist
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import Int64MultiArray
+from std_msgs.msg import Int32, Int64MultiArray
 
+from .aruco import ArucoDetector
 from .camera import LineDetector
 from .pid import PIDController
 from .serial_bridge import SerialBridge
@@ -27,6 +28,11 @@ class LineTrackerNode(Node):
         self.declare_parameter("ki", 0.0)
         self.declare_parameter("kd", 0.0)
         self.declare_parameter("wheel_separation_m", 0.48)
+
+        # Parameter ArUco
+        self.declare_parameter("aruco_enabled", True)
+        self.declare_parameter("aruco_consecutive_frames", 3)
+        self.declare_parameter("aruco_cooldown_seconds", 2.5)
 
         # Kecepatan & Pengaturan Gerak
         self.linear_speed = 0.30  # m/s
@@ -64,13 +70,23 @@ class LineTrackerNode(Node):
         )
         self.last_time = time.time()
 
+        # Detektor ArUco untuk identifikasi waypoint / persimpangan
+        self.aruco_enabled = bool(self.get_parameter("aruco_enabled").value)
+        aruco_frames = int(self.get_parameter("aruco_consecutive_frames").value)
+        aruco_cooldown = float(self.get_parameter("aruco_cooldown_seconds").value)
+        self.aruco_detector = ArucoDetector(
+            consecutive_frames=aruco_frames,
+            cooldown_seconds=aruco_cooldown,
+        )
+
         self.bridge = CvBridge()
         self.debug_image_publisher = self.create_publisher(Image, "/line_tracker/debug_image", 10)
         self.cmd_vel_publisher = self.create_publisher(Twist, "/cmd_vel", 10)
         self.encoder_delta_publisher = self.create_publisher(Int64MultiArray, "/line_tracker/encoder_delta", 10)
+        self.aruco_id_publisher = self.create_publisher(Int32, "/aruco/detected_id", 10)
 
         self.timer = self.create_timer(1.0 / self.publish_rate_hz, self.timer_callback)
-        self.get_logger().info("Line tracker node aktif.")
+        self.get_logger().info("Line tracker & ArUco detector node aktif.")
 
     def timer_callback(self):
         delta = self.serial_bridge.read_encoder_delta()
@@ -84,6 +100,16 @@ class LineTrackerNode(Node):
             return
 
         detection = self.line_detector.detect(frame)
+
+        # Deteksi ArUco pada frame yang sama dan anotasikan ke debug image
+        if self.aruco_enabled:
+            confirmed_marker_id = self.aruco_detector.detect(frame, detection.debug_image)
+            if confirmed_marker_id is not None:
+                id_message = Int32()
+                id_message.data = int(confirmed_marker_id)
+                self.aruco_id_publisher.publish(id_message)
+                self.get_logger().info(f"[ArUco] Marker Terkonfirmasi: ID {confirmed_marker_id}")
+
         self._publish_debug_image(detection.debug_image)
 
         now = time.time()

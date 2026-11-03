@@ -38,13 +38,17 @@ line_tracker_ros2/
 | `max_angular_speed_radps` | `1.0` | batas kecepatan putar robot (rad/s) |
 | `max_wheel_speed_mps` | `0.30` | skala perkiraan untuk memetakan kecepatan roda ke PWM |
 | `publish_rate_hz` | `30.0` | frekuensi loop |
+| `aruco_enabled` | `true` | aktifkan deteksi marker ArUco |
+| `aruco_consecutive_frames` | `3` | filter debouncing konfirmasi marker stabil (frame) |
+| `aruco_cooldown_seconds` | `2.5` | cooldown pencegahan trigger ganda (detik) |
 
 ## Topik
 
 | Topik | Tipe | Keterangan |
 | --- | --- | --- |
-| `/line_tracker/debug_image` | `sensor_msgs/Image` | frame debug (untuk `rqt_image_view`) |
+| `/line_tracker/debug_image` | `sensor_msgs/Image` | frame debug (untuk `rqt_image_view`, termasuk overlay ArUco) |
 | `/line_tracker/normalized_error` | `std_msgs/Float64` | error posisi garis ternormalisasi |
+| `/aruco/detected_id` | `std_msgs/Int32` | ID marker ArUco terkonfirmasi (waypoint / simpang) |
 | `/motor_pwm` | `std_msgs/Int32MultiArray` | `[left_pwm, right_pwm]` |
 | `/line_tracker/wheel_speeds` | `std_msgs/Float64MultiArray` | target kinematika `[v_left, v_right]` dalam m/s |
 | `/cmd_vel` | `geometry_msgs/Twist` | kecepatan robot: m/s dan rad/s |

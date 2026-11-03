@@ -21,6 +21,11 @@ line_tracker_node:
     max_wheel_speed_mps: 0.30 # skala perkiraan untuk konversi ke PWM
     publish_rate_hz: 30.0 # frekuensi loop (setara FPS kamera)
 
+    # Konfigurasi ArUco (Tahap 3 - Navigasi Checkpoint & Percabangan)
+    aruco_enabled: true
+    aruco_consecutive_frames: 3 # Debounce: stabil 3 frame berturut-turut
+    aruco_cooldown_seconds: 2.5 # Cooldown (detik) agar tidak trigger ganda pada satu marker
+
 odometry_node:
   ros__parameters:
     # Kalibrasi DDMR: sinkron dengan nilai perangkat keras di atas.

@@ -87,10 +87,10 @@ checklist**, sehingga jadwal disusun ulang. Ini usulan; sesuaikan dengan kapasit
 | Minggu | Tanggal | Fokus | Keluaran yang diharapkan |
 | ---: | :--- | :--- | :--- |
 | 5 | 26–30 Okt | Tahap 0–1: perbaikan E-stop, tanda encoder/arah motor, checksum serial, mulai tuning PID | Robot aman dan gerak maju/mundur/putar benar |
-| 6 | 2–6 Nov | Tahap 2 + 2B: kalibrasi odometri, IMU BNO055. Paralel: Tahap 3 (ArUco) dan 6A (IoT localhost, telemetri) | Odometri tervalidasi; ArUco terdeteksi; GUI web menampilkan pose. **Keputusan upgrade mekanik/hardware** |
-| 7 | 9–13 Nov | Tahap 4A: peta graf + FSM + route manager minimum; mulai Tahap 5 | Peta CP1–CP3 termuat; robot berhenti di checkpoint |
-| 8 | 16–20 Nov | Tahap 5 + 6B/6C: navigasi percabangan, command IoT (`go_to_waypoint`, `pause`, `cancel`), Firebase | Rute CP1→CP2→CP3 dari command IoT |
-| 9 | 23–27 Nov | Tahap 7: uji penuh, dokumentasi, video, simulasi kondisi venue. **Freeze fitur** | Sistem siap demo |
+| 6 | 2–6 Nov | Tahap 2: kalibrasi odometri. Paralel: Tahap 3 (ArUco fisik & modul persepsi) dan 6A (IoT localhost, telemetri) | Odometri tervalidasi; ArUco terdeteksi andal; GUI web menampilkan pose. **Keputusan upgrade mekanik/hardware** |
+| 7 | 9–13 Nov | Tahap 4A: peta graf + FSM misi + route manager minimum; mulai Tahap 5 | Peta CP1–CP3 termuat; robot berhenti di checkpoint & mengeksekusi cabang |
+| 8 | 16–20 Nov | Tahap 5 + 6B/6C: navigasi percabangan penuh, command IoT (`go_to_waypoint`, `pause`, `cancel`), Firebase | Rute CP1→CP2→CP3 dari command IoT lancar |
+| 9 | 23–27 Nov | Tahap 7: uji integrasi penuh, dokumentasi, video, simulasi venue. Penyempurnaan: IMU BNO055 (bila waktu ada). **Freeze fitur** | Sistem siap demo |
 | 10 | 30 Nov–4 Des | Pameran; hanya perbaikan bug kritis | |
 
 ---
@@ -217,39 +217,26 @@ trigonometri dilakukan di ROS 2.
 
 ---
 
-## Tahap 2B — Orientasi dengan IMU BNO055
-
-Heading dari encoder saja mudah menyimpang saat roda selip. Catatan tim menetapkan
-sensor orientasi BNO055 (I2C) sebagai bagian target awal.
-
-### Pekerjaan
-
-- Tentukan sambungan I2C: ke Arduino Mega (SDA 20, SCL 21; firmware mengirim yaw lewat
-  frame serial tambahan, misalnya `I,<yaw_rad>`) atau langsung ke komputer ROS.
-  Sambungan ke Mega lebih disarankan karena BNO055 dikenal bermasalah dengan
-  *clock stretching* pada I2C hardware Raspberry Pi.
-- Mulai dari mode fusi tanpa magnetometer (mode IMU), karena motor dan baterai dapat
-  mengganggu magnetometer. Pindah ke NDOF hanya jika terbukti stabil.
-- Publikasikan `sensor_msgs/msg/Imu` (mis. `/imu/data`) dengan frame yang konsisten
-  terhadap `base_link`; samakan konvensi tanda yaw dengan $\theta$ odometri.
-- Gunakan yaw IMU untuk (a) membandingkan dengan $\Delta\theta$ odometri pada uji putar,
-  (b) mendeteksi selip, dan (c) opsional fusi dengan `robot_localization` (EKF).
-- Pertimbangkan *heading hold* saat berbelok di persimpangan memakai yaw IMU.
-
-### Selesai jika
-
-- Yaw IMU stabil, tanda dan sumbu benar, dan galat putar 360° lebih kecil daripada
-  odometri murni (atau perbedaannya terdokumentasi).
-
----
-
-## Tahap 3 — Eksperimen persepsi dan deteksi ArUco fisik
+## Tahap 3 — Eksperimen persepsi dan deteksi ArUco fisik (Prioritas Utama Demo)
 
 ### Alasan tahapan ini didahulukan sebelum perancangan peta
 Format peta dan penempatan titik henti/intersection sangat bergantung pada batasan fisik optik:
 jarak pandang deteksi, sudut kemiringan (*pitch*) kamera garis, pencahayaan, dan ukuran marker.
-Eksperimen fisik harus dilakukan sebelum menetapkan spesifikasi graf peta.
-Tahap ini dapat berjalan paralel dengan Tahap 2 dan 2B karena tidak bergantung pada odometri.
+Eksperimen fisik dan modul deteksi harus diimplementasikan sebelum menetapkan spesifikasi graf peta.
+
+> [!NOTE]
+> **Reposisi Tahap Orientasi IMU:**
+> Tahap orientasi IMU BNO055 digeser ke fase penyempurnaan setelah Tahap 5 & 6. AGV ini beroperasi
+> dengan panduan garis fisik (*line-guided*) yang secara aktif mengoreksi orientasi pada 30 Hz,
+> sedangkan ArUco memberikan referensi posisi absolut pada persimpangan, sehingga ketiadaan IMU
+> tidak memblokir persiapan demo utama.
+
+### Solusi Arsitektur Deteksi ArUco Mengingat Batasan Kamera V4L2
+Di Linux, perangkat kamera V4L2 (`/dev/video*`) tidak dapat dibuka oleh lebih dari satu proses secara bersamaan.
+Untuk menghindari *overhead* transmisi citra mentah antar-node serta mencegah konflik *resource busy*:
+- Modul deteksi ArUco dibuat sebagai kelas helper terisolasi (`aruco.py`) yang dipanggil langsung di dalam loop pembacaan frame `line_tracker_node`.
+- Marker ID yang terdeteksi secara stabil (setelah filter *debouncing* dan *cooldown*) diterbitkan ke topik `/aruco/detected_id` (`std_msgs/msg/Int32`).
+- **Skema Penempatan Marker:** 1 marker ArUco dipasang tepat di setiap titik pertemuan persimpangan (ditempel di sela/sudut persimpangan agar tidak menutupi kontinuitas garis hitam panduan). Karena kemiringan kamera memproyeksikan pandangan ke depan (*lookahead distance* 25–40 cm), kamera sudah membaca dan mengonfirmasi ID marker sebelum roda robot mencapai titik belok persimpangan.
 
 ### Gerbang keputusan: ArUco atau alternatif
 
@@ -451,20 +438,47 @@ diulang**.
 
 ---
 
+## Penyempurnaan Lanjutan — Orientasi dengan IMU BNO055 (Setelah ArUco & Misi)
+
+Heading dari encoder saja mudah menyimpang saat roda selip. Sensor orientasi BNO055 (I2C)
+dijadikan fase penyempurnaan setelah alur navigasi garis, deteksi ArUco, dan misi utama
+telah teruji di lintasan.
+
+### Pekerjaan
+
+- Tentukan sambungan I2C: ke Arduino Mega (SDA 20, SCL 21; firmware mengirim yaw lewat
+  frame serial tambahan, misalnya `I,<yaw_rad>`) atau langsung ke komputer ROS.
+  Sambungan ke Mega lebih disarankan karena BNO055 dikenal bermasalah dengan
+  *clock stretching* pada I2C hardware Raspberry Pi.
+- Mulai dari mode fusi tanpa magnetometer (mode IMU), karena motor dan baterai dapat
+  mengganggu magnetometer. Pindah ke NDOF hanya jika terbukti stabil.
+- Publikasikan `sensor_msgs/msg/Imu` (mis. `/imu/data`) dengan frame yang konsisten
+  terhadap `base_link`; samakan konvensi tanda yaw dengan $\theta$ odometri.
+- Gunakan yaw IMU untuk (a) membandingkan dengan $\Delta\theta$ odometri pada uji putar,
+  (b) mendeteksi selip, dan (c) opsional fusi dengan `robot_localization` (EKF).
+- Pertimbangkan *heading hold* saat berbelok di persimpangan memakai yaw IMU.
+
+### Selesai jika
+
+- Yaw IMU stabil, tanda dan sumbu benar, dan galat putar 360° lebih kecil daripada
+  odometri murni (atau perbedaannya terdokumentasi).
+
+---
+
 ## Prioritas dan urutan tahapan
 
 | Urutan | Fase | Fokus Utama | Alasan Rekayasa |
 | ---: | :--- | :--- | :--- |
 | **1** | **Tahap 0** | Keselamatan fisik (termasuk perbaikan E-stop), parameter mekanik, command timeout | Fondasi wajib sebelum motor diuji di lantai |
 | **2** | **Tahap 1** | Kontrol kecepatan tertutup, protokol serial dua arah, checksum | Respon gerak linier dan terukur; proteksi noise |
-| **3** | **Tahap 2 + 2B** | Odometri DDMR, kalibrasi, IMU BNO055 | Posisi dan orientasi tanpa membebani mikrokontroler |
-| **3** (paralel) | **Tahap 3** | Uji persepsi optik dan ArUco fisik | Memastikan kamera mampu melihat marker sebelum mendesain peta |
-| **3** (paralel) | **Tahap 6A** | IoT localhost, telemetri read-only | Hanya butuh `/odom`; mengurangi risiko di akhir |
-| **4** | **Tahap 4A** | Peta graf, FSM misi, route manager | Representasi rute CP1–CP3 |
-| **5** | **Tahap 5** | Navigasi line tracking percabangan | Navigasi otonom terpandu garis antar-waypoint |
-| **6** | **Tahap 6B/6C** | Firebase, command misi | Menghubungkan robot ke dashboard secara aman |
-| **7** | **Tahap 7** | Uji integrasi dan dokumentasi | Kesiapan demo |
-| Opsional | **Tahap 4B**, jalur mekanik | Refaktorisasi lanjutan; upgrade hardware | Dikerjakan hanya jika jadwal memungkinkan |
+| **3** | **Tahap 2** | Odometri DDMR dan kalibrasi fisik (lurus 2m & putar 360°) | Estimasi perpindahan global untuk navigasi segmen |
+| **3** (paralel) | **Tahap 3** | Uji persepsi optik dan modul ArUco | Referensi posisi absolut dan identifikasi cabang persimpangan |
+| **3** (paralel) | **Tahap 6A** | IoT localhost, telemetri read-only | Memantau odometri & status FSM tanpa risiko dependensi internet |
+| **4** | **Tahap 4A** | Peta graf, FSM misi, route manager | Logika urutan checkpoint CP1–CP3 |
+| **5** | **Tahap 5** | Navigasi line tracking percabangan | Pemilihan cabang di persimpangan berdasarkan instruksi rute |
+| **6** | **Tahap 6B/6C** | Firebase, command misi | Kontrol misi dari dashboard jarak jauh |
+| **7** | **Tahap 7** | Uji integrasi penuh dan dokumentasi | Kesiapan demo pameran |
+| Penyempurnaan | **IMU BNO055**, Tahap 4B, Mekanik | Fusi heading IMU, refaktorisasi modular lanjutan | Dikerjakan jika waktu memungkinkan tanpa menghambat alur demo |
 
 ---
 

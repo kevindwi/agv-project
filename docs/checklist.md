@@ -89,48 +89,37 @@ sudah diuji pada robot fisik; validasi hardware ditandai terpisah.
 - [ ] Visualisasikan pose, path, dan TF di RViz untuk memastikan pergerakan halus tanpa patah.
 - [ ] Dokumentasikan laju akumulasi drift odometri per meter perjalanan.
 
-## Tahap 2B — Orientasi IMU BNO055
+## Tahap 3 — Eksperimen persepsi dan deteksi ArUco fisik (Prioritas Utama Demo)
 
-- [ ] Tentukan sambungan I2C (disarankan ke Arduino Mega: SDA 20, SCL 21) dan catat di `hardware.md`.
-- [ ] Baca yaw BNO055 dan kirim ke ROS (mis. frame `I,<yaw_rad>`) atau langsung dari komputer ROS.
-- [ ] Mulai dengan mode fusi tanpa magnetometer; uji gangguan magnetik dari motor sebelum memakai NDOF.
-- [ ] Publikasikan `sensor_msgs/msg/Imu` dengan frame dan tanda yaw konsisten dengan odometri.
-- [ ] Bandingkan yaw IMU dengan $\Delta\theta$ odometri pada uji putar 360°.
-- [ ] (Opsional) Fusi odometri + IMU dengan `robot_localization`.
-
-## Tahap 3 — Eksperimen persepsi dan deteksi ArUco fisik
-
-- [ ] Putuskan ArUco vs alternatif landmark/topologi (batas: akhir Minggu 6).
-- [ ] Tentukan skema penempatan fisik marker ArUco (lantai atau tiang/dinding persimpangan).
-- [ ] Evaluasi FOV kamera: pastikan kamera mampu melihat marker ArUco dengan jarak deselerasi yang aman sebelum tiba di intersection.
-- [ ] Kalibrasi parameter intrinsik dan distorsi lensa kamera menggunakan `camera_calibration` ROS 2.
-- [ ] Implementasikan node deteksi ArUco menggunakan OpenCV `cv2.aruco`.
-- [ ] Implementasikan filter *debouncing*: konfirmasi deteksi stabil selama beberapa frame berturut-turut sebelum menandai waypoint terdeteksi.
-- [ ] Ukur jarak efektif deteksi dan estimasi pose marker relatif terhadap kamera.
-- [ ] Uji kehandalan deteksi pada berbagai kondisi pencahayaan, blur gerak, dan sudut kemiringan kamera.
-- [ ] Tetapkan ukuran fisik marker dan jarak pemasangan yang optimal.
+- [x] Pilih solusi integrasi: modul deteksi ArUco bersama frame kamera lokal (`aruco.py` di `line_tracker_node`) untuk menghindari konflik *resource busy* `/dev/video*`.
+- [x] Tentukan skema penempatan fisik marker ArUco: ditempel di lantai tepat pada titik persimpangan (di sudut/sela antara cabang garis agar tidak menutupi garis panduan; kamera menangkapnya lebih awal via lookahead jarak pandang 25–40 cm).
+- [ ] Evaluasi FOV kamera: pastikan kamera mampu melihat marker ArUco dengan jarak deselerasi yang aman sebelum roda tiba di titik belok intersection.
+- [x] Implementasikan deteksi ArUco menggunakan OpenCV `cv2.aruco` (Dictionary `DICT_4X4_50`).
+- [x] Implementasikan filter *debouncing*: konfirmasi deteksi stabil selama minimal 3 frame berturut-turut sebelum menandai waypoint terdeteksi.
+- [x] Implementasikan cooldown / hysteresis timer agar marker yang sama tidak memicu sinyal ganda saat dilewati.
+- [x] Publikasikan marker ID ke topik `/aruco/detected_id` (`std_msgs/msg/Int32`).
+- [ ] Uji kehandalan deteksi pada berbagai kondisi pencahayaan dan kecepatan robot di lintasan.
+- [ ] Tetapkan ukuran fisik marker (rekomendasi 10×10 cm hingga 12×12 cm).
 
 ## Tahap 4 — Peta graf, misi, dan refaktorisasi ROS 2
 
 ### 4A — Wajib untuk demo
 
-- [ ] `aruco_detector_node` (pemrosesan citra marker ArUco).
-- [ ] `mission_controller_node` (state machine navigasi misi).
+- [ ] `mission_controller_node` (state machine navigasi misi: `IDLE`, `NAVIGATING`, `AT_INTERSECTION`, `ARRIVED`, `PAUSED`, `ERROR`, `ESTOP`).
 - [ ] Definisikan format peta lintasan berbasis graf (YAML/JSON): node waypoint (CP1–CP3),
   relasi edge, arah, batas kecepatan, instruksi percabangan, dan ID ArUco.
 - [ ] Buat Waypoint & Route Manager untuk menghasilkan rute sekuensial dari titik awal ke tujuan.
-- [ ] Definisikan FSM misi: `IDLE`, `NAVIGATING`, `AT_INTERSECTION`, `ARRIVED`, `PAUSED`, `ERROR`, `ESTOP`.
 - [ ] Buat unit test untuk validasi integritas struktur file peta (tidak ada waypoint yatim/loop buntu tak terdefinisi).
 
 ### 4B — Refaktorisasi lanjutan (opsional, prioritas rendah)
 
 - [x] `odometry_node` (perhitungan pose dan publish TF) sudah terpisah.
 - [ ] `serial_bridge_node` (I/O UART dua arah, framing, checksum).
-- [ ] `line_detector_node` (pemrosesan citra garis).
+- [ ] `line_detector_node` (pemrosesan citra garis terpisah jika diperlukan).
 
 ## Tahap 5 — Navigasi line tracking percabangan di intersection
 
-- [ ] Implementasikan logika deselerasi saat odometri mendeteksi robot mendekati persimpangan.
+- [ ] Implementasikan logika deselerasi saat odometri / ArUco mendeteksi robot mendekati persimpangan.
 - [ ] Implementasikan verifikasi ArUco di persimpangan yang sesuai dengan rute misi.
 - [ ] Gunakan pose ArUco untuk mengoreksi akumulasi drift odometri (*checkpoint reset*).
 - [ ] Kembangkan logika pemilihan cabang (*branch switching*) pada kontur garis (belok kiri, lurus, atau belok kanan).
@@ -176,6 +165,18 @@ sudah diuji pada robot fisik; validasi hardware ditandai terpisah.
 - [ ] Dokumentasikan diagram wiring hardware final, pinout, dan parameter kalibrasi.
 - [ ] Dokumentasikan prosedur peluncuran sistem (*launch files*), penanganan error (*recovery*), dan manual operasi.
 - [ ] Rekam video demonstrasi misi penuh dari command IoT hingga robot tiba di tujuan dan melaporkan status selesai.
+
+## Penyempurnaan Lanjutan — Orientasi IMU BNO055 (Setelah ArUco & Misi)
+
+> [!NOTE]
+> Tahap orientasi IMU dipindahkan ke fase penyempurnaan setelah rute line tracking, ArUco, dan misi berjalan stabil. Line tracking secara inheren mengoreksi orientasi robot terhadap jalur, dan ArUco memberikan referensi posisi absolut pada persimpangan, sehingga IMU tidak memblokir persiapan demo utama.
+
+- [ ] Tentukan sambungan I2C (disarankan ke Arduino Mega: SDA 20, SCL 21) dan catat di `hardware.md`.
+- [ ] Baca yaw BNO055 dan kirim ke ROS (mis. frame `I,<yaw_rad>`) atau langsung dari komputer ROS.
+- [ ] Mulai dengan mode fusi tanpa magnetometer; uji gangguan magnetik dari motor sebelum memakai NDOF.
+- [ ] Publikasikan `sensor_msgs/msg/Imu` dengan frame dan tanda yaw konsisten dengan odometri.
+- [ ] Bandingkan yaw IMU dengan $\Delta\theta$ odometri pada uji putar 360°.
+- [ ] (Opsional) Fusi odometri + IMU dengan `robot_localization`.
 
 ## Jalur paralel — Upgrade hardware dan mekanik (opsional)
 

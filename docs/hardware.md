@@ -118,3 +118,10 @@ dari ROS/IoT tidak boleh menghidupkannya kembali sampai E-stop dilepas.
 2. Jalankan node; pastikan log `Terhubung ke serial`.
 3. Cabut kabel serial saat motor bergerak; firmware harus berhenti karena
    `SERIAL_COMMAND_TIMEOUT_MS` (500 ms).
+
+### 4.7 Penempatan Marker ArUco di Persimpangan
+
+1. **Ukuran Marker:** Cetak marker berukuran 10 cm × 10 cm atau 12 cm × 12 cm menggunakan dictionary `DICT_4X4_50`.
+2. **Posisi Pemasangan:** Ditempel mendatar di lantai tepat pada titik persimpangan (pada sudut dalam atau sela antar-cabang garis).
+3. **Penting — Jangan Menutupi Garis:** Pastikan batas putih dan pola hitam marker **tidak menutupi kontinuitas garis hitam panduan**, agar deteksi kontur garis pada `LineDetector` tetap stabil.
+4. **Karakteristik Kamera (Lookahead FOV):** Dengan kemiringan kamera menghadap ke lantai, jangkauan pandang kamera (*lookahead*) melihat 25–40 cm di depan bumper roda. Marker di persimpangan akan terkonfirmasi oleh `ArucoDetector` (~0,1 detik) sebelum roda robot mencapai titik belok persimpangan.
