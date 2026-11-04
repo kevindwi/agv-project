@@ -10,13 +10,14 @@ line_tracker_ros2/
 │   ├── __init__.py
 │   ├── line_tracker_node.py   # loop kontrol: kamera -> PID garis -> publish /cmd_vel & bridge serial
 │   ├── odometry_node.py       # delta encoder -> /odom + TF odom/base_link + /path
-│   ├── camera.py              # akuisisi kamera V4L2 + deteksi kontur garis (ROI)
+│   ├── mission_manager_node.py# FSM misi: mengatur status garis, persimpangan, belok odometri
+│   ├── camera.py              # akuisisi kamera V4L2 + deteksi kontur garis & persimpangan (ROI)
 │   ├── pid.py                 # kontroler PID diskrit
 │   └── serial_bridge.py       # protokol serial dua arah C/E (cmd_vel & encoder delta)
 ├── config/
-│   └── line_tracker.yaml      # kalibrasi DDMR fisik, PID, dan konfigurasi serial
+│   └── line_tracker.yaml      # kalibrasi DDMR fisik, PID, odometri, dan misi FSM
 ├── launch/
-│   └── line_tracker.launch.py # launch line_tracker_node dan odometry_node
+│   └── line_tracker.launch.py # launch line_tracker_node, odometry_node, dan mission_manager_node
 ├── resource/                  # ament index
 ├── test/
 ├── package.xml
@@ -59,15 +60,29 @@ Didefinisikan di [`config/line_tracker.yaml`](config/line_tracker.yaml):
 | `odom_frame_id` | `odom` | Nama frame referensi odometri |
 | `base_frame_id` | `base_link` | Nama frame base robot |
 
+### `mission_manager_node`
+
+| Parameter | Default | Keterangan |
+| --- | --- | --- |
+| `turn_speed_radps` | `0.5` | Kecepatan sudut saat belok odometri (rad/s) |
+| `turn_angle_deg` | `90.0` | Sudut belokan standar (derajat) |
+| `turn_angle_tolerance_deg` | `3.0` | Toleransi sudut belok (derajat) |
+| `intersection_debounce_distance_m` | `0.30` | Jarak minimum antar deteksi persimpangan (m) |
+| `auto_start` | `true` | Mulai misi otomatis saat node aktif |
+
 ## Topik
 
 | Topik | Tipe | Keterangan |
 | --- | --- | --- |
-| `/line_tracker/debug_image` | `sensor_msgs/Image` | Frame debug dengan overlay ROI dan posisi garis |
+| `/line_tracker/debug_image` | `sensor_msgs/Image` | Frame debug dengan overlay ROI, garis, dan persimpangan |
 | `/cmd_vel` | `geometry_msgs/Twist` | Perintah kecepatan robot (`linear.x` m/s, `angular.z` rad/s) |
 | `/line_tracker/encoder_delta` | `std_msgs/Int64MultiArray` | Delta tick `[left, right]` dari telemetri serial firmware |
+| `/line_tracker/status` | `std_msgs/String` | Status garis: `ON_LINE`, `INTERSECTION_DETECTED`, `LINE_LOST` |
 | `/odom` | `nav_msgs/Odometry` | Estimasi pose $(x, y, \theta)$ dan twist robot dalam frame `odom` |
 | `/path` | `nav_msgs/Path` | Jejak pose robot di frame `odom` untuk RViz |
+| `/mission_manager/control` | `std_msgs/String` | Kontrol FSM ke line tracker: `PAUSE` / `RESUME` |
+| `/mission_manager/cmd_vel` | `geometry_msgs/Twist` | Override kecepatan selama manuver persimpangan |
+| `/mission_manager/state` | `std_msgs/String` | State FSM saat ini (`IDLE`, `FOLLOW_LINE`, `AT_INTERSECTION`, `TURNING`, `GOAL_REACHED`) |
 
 ## Visualisasi & Monitoring
 

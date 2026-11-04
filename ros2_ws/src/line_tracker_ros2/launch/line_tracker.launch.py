@@ -49,7 +49,16 @@ def launch_setup(context, *args, **kwargs):
         parameters=[config_file],
     )
 
-    return [node, odometry_node]
+    mission_manager_node = Node(
+        package="line_tracker_ros2",
+        executable="mission_manager_node",
+        name="mission_manager_node",
+        output="screen",
+        emulate_tty=True,
+        parameters=[config_file],
+    )
+
+    return [node, odometry_node, mission_manager_node]
 
 
 def generate_launch_description():

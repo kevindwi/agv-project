@@ -116,12 +116,22 @@ sudah diuji pada robot fisik; validasi hardware ditandai terpisah.
 
 ### 4A — Wajib untuk demo
 
-- [ ] `aruco_detector_node` (pemrosesan citra marker ArUco).
-- [ ] `mission_controller_node` (state machine navigasi misi).
+- [x] `mission_manager_node` (state machine navigasi misi berbasis FSM) — **implementasi dasar selesai**.
+  - States: `IDLE`, `FOLLOW_LINE`, `AT_INTERSECTION`, `TURNING`, `GOAL_REACHED`.
+  - Misi H-track dikodekan sebagai daftar waypoint `(id, action)` di YAML.
+  - Aksi yang didukung: `CONTINUE`, `TURN_LEFT`, `TURN_RIGHT`, `STOP`.
+- [x] Deteksi persimpangan di `camera.py` via analisis lebar kontur (crossbar detection).
+- [x] `line_tracker_node` menerbitkan `/line_tracker/status` (`ON_LINE` / `INTERSECTION_DETECTED` / `LINE_LOST`).
+- [x] `line_tracker_node` menerima `/mission_manager/control` (`PAUSE` / `RESUME`) untuk on/off PID.
+- [x] `line_tracker_node` meneruskan `/mission_manager/cmd_vel` ke serial saat PID di-pause.
+- [ ] Tuning parameter `intersection_debounce_distance_m` pada lintasan fisik (mulai dari 0.30 m).
+- [ ] Tuning `turn_speed_radps` dan `turn_angle_tolerance_deg` pada robot fisik.
+- [ ] Validasi urutan waypoint H-track dengan uji lintasan lengkap.
+- [ ] Tambahkan penanganan kondisi `LINE_LOST` di Mission Manager (berhenti aman atau recovery).
+- [ ] `aruco_detector_node` (opsional; diperlukan jika koreksi drift diprioritaskan).
 - [ ] Definisikan format peta lintasan berbasis graf (YAML/JSON): node waypoint (CP1–CP3),
   relasi edge, arah, batas kecepatan, instruksi percabangan, dan ID ArUco.
 - [ ] Buat Waypoint & Route Manager untuk menghasilkan rute sekuensial dari titik awal ke tujuan.
-- [ ] Definisikan FSM misi: `IDLE`, `NAVIGATING`, `AT_INTERSECTION`, `ARRIVED`, `PAUSED`, `ERROR`, `ESTOP`.
 - [ ] Buat unit test untuk validasi integritas struktur file peta (tidak ada waypoint yatim/loop buntu tak terdefinisi).
 
 ### 4B — Refaktorisasi lanjutan (opsional, prioritas rendah)
