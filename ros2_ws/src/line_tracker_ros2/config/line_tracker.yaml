@@ -34,3 +34,18 @@ odometry_node:
     path_publish_rate_hz: 2.0
     odom_frame_id: odom
     base_frame_id: base_link
+
+mission_manager_node:
+  ros__parameters:
+    # Kecepatan putar saat belokan odometri (rad/s). Turunkan jika robot selip.
+    turn_speed_radps: 0.5
+    # Sudut target belokan (derajat). Ubah ke 180.0 untuk putar balik.
+    turn_angle_deg: 90.0
+    # Toleransi sudut belokan (derajat). Perbesar jika robot berhenti terlalu awal.
+    turn_angle_tolerance_deg: 3.0
+    # Jarak minimum antar-persimpangan (meter) untuk mencegah deteksi ganda.
+    # Setel lebih besar dari lebar garis crossbar di lintasan.
+    intersection_debounce_distance_m: 0.30
+    # True: misi dimulai otomatis saat node aktif.
+    # False: tunggu perintah eksternal (untuk debugging per-state).
+    auto_start: true

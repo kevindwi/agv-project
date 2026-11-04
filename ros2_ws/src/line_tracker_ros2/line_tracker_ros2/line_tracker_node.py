@@ -8,6 +8,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import Int64MultiArray
+from std_msgs.msg import String
 
 from .camera import LineDetector
 from .pid import PIDController
@@ -67,6 +68,13 @@ class LineTrackerNode(Node):
         )
         self.last_time = time.time()
 
+        # --- State kontrol dari Mission Manager ---
+        # True  = PID line tracking aktif (default)
+        # False = Mission Manager mengendalikan cmd_vel (mis. saat belok di persimpangan)
+        self._line_tracking_enabled: bool = True
+        # Simpan perintah override dari Mission Manager saat line tracking di-pause
+        self._override_cmd_vel: Twist = Twist()
+
         # Publisher
         self.bridge = CvBridge()
 
@@ -77,13 +85,37 @@ class LineTrackerNode(Node):
         self.encoder_delta_publisher = self.create_publisher(
             Int64MultiArray, "/line_tracker/encoder_delta", 10
         )
+        # Status garis untuk Mission Manager
+        # Nilai: "ON_LINE" | "INTERSECTION_DETECTED" | "LINE_LOST"
+        self.status_publisher = self.create_publisher(
+            String, "/line_tracker/status", 10
+        )
+
+        # Subscriber: perintah kontrol dari Mission Manager
+        # Pesan yang dipahami:
+        #   "RESUME" = aktifkan kembali PID line tracking
+        #   "PAUSE"  = nonaktifkan PID; Mission Manager ambil alih cmd_vel
+        self.create_subscription(
+            String,
+            "/mission_manager/control",
+            self._on_mission_control,
+            10,
+        )
+        # Subscriber: override cmd_vel dari Mission Manager (aktif saat PAUSE)
+        self.create_subscription(
+            Twist,
+            "/mission_manager/cmd_vel",
+            self._on_override_cmd_vel,
+            10,
+        )
 
         # Timer
         self.timer = self.create_timer(1.0 / self.publish_rate_hz, self.timer_callback)
         self.get_logger().info("Line tracker node (PID) aktif.")
 
     def timer_callback(self):
-        # Baca telemetri setiap callback, termasuk saat garis tidak ditemukan.
+        # Baca encoder setiap callback — termasuk saat garis tidak ditemukan,
+        # agar odometry_node terus mendapat data delta ticks.
         delta = self.serial_bridge.read_encoder_delta()
         if delta is not None:
             encoder_message = Int64MultiArray()
@@ -99,6 +131,29 @@ class LineTrackerNode(Node):
         detection = self.line_detector.detect(frame)
         self._publish_debug_image(detection.debug_image)
 
+        # ------ Publikasi status garis ke Mission Manager ------
+        if detection.intersection_detected:
+            status = "INTERSECTION_DETECTED"
+        elif detection.found:
+            status = "ON_LINE"
+        else:
+            status = "LINE_LOST"
+        self.status_publisher.publish(String(data=status))
+
+        # ------ Mode: Mission Manager mengambil alih kendali ------
+        # Encoder tetap dibaca di atas agar odometri tidak berhenti.
+        if not self._line_tracking_enabled:
+            # Teruskan override cmd_vel dari Mission Manager ke serial
+            try:
+                self.serial_bridge.send_cmd_vel(
+                    self._override_cmd_vel.linear.x,
+                    self._override_cmd_vel.angular.z,
+                )
+            except OSError as error:
+                self.get_logger().warn(f"Gagal mengirim override serial: {error}")
+            return
+
+        # ------ Mode: PID line tracking aktif ------
         # Tidak ada garis -> hentikan motor, jangan exit node
         if not detection.found:
             self._stop_motors()
@@ -137,8 +192,39 @@ class LineTrackerNode(Node):
             self.get_logger().warn(f"Gagal mengirim data serial: {error}")
 
     # ------------------------------------------------------------------ #
-    # Helper
+    # Subscriber callbacks
     # ------------------------------------------------------------------ #
+
+    def _on_mission_control(self, msg: String) -> None:
+        """Tangani perintah PAUSE / RESUME dari Mission Manager.
+
+        PAUSE: hentikan PID line tracking; biarkan Mission Manager kirim
+               cmd_vel langsung ke /mission_manager/cmd_vel.
+        RESUME: aktifkan kembali PID; reset dt agar tidak ada spike angular.
+        """
+        cmd = msg.data.strip().upper()
+        if cmd == "PAUSE":
+            if self._line_tracking_enabled:
+                self._line_tracking_enabled = False
+                self.pid.reset()  # Reset integral agar tidak windup saat lanjut
+                self.get_logger().info("Line tracking di-PAUSE oleh Mission Manager.")
+        elif cmd == "RESUME":
+            if not self._line_tracking_enabled:
+                self._line_tracking_enabled = True
+                self._override_cmd_vel = Twist()
+                self.last_time = time.time()  # Reset dt agar tidak spike PID
+                self.get_logger().info("Line tracking di-RESUME oleh Mission Manager.")
+        else:
+            self.get_logger().warn(f"Perintah kontrol tidak dikenal: '{cmd}'")
+
+    def _on_override_cmd_vel(self, msg: Twist) -> None:
+        """Simpan override cmd_vel dari Mission Manager (digunakan saat PAUSE)."""
+        self._override_cmd_vel = msg
+
+    # ------------------------------------------------------------------ #
+    # Private helpers
+    # ------------------------------------------------------------------ #
+
     def _publish_debug_image(self, image):
         """Publish frame dengan overlay ROI dan posisi garis."""
         try:
@@ -150,7 +236,6 @@ class LineTrackerNode(Node):
     def _stop_motors(self):
         """Hentikan motor (topik + firmware)."""
         self.cmd_vel_publisher.publish(Twist())
-        # self.wheel_speed_publisher.publish(Float64MultiArray())
         try:
             self.serial_bridge.send_cmd_vel(0.0, 0.0)
         except OSError:
