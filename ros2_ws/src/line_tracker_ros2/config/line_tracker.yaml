@@ -20,6 +20,13 @@ line_tracker_node:
     max_angular_speed_radps: 1.0 # batas kecepatan putar robot
     max_wheel_speed_mps: 0.30 # skala perkiraan untuk konversi ke PWM
     publish_rate_hz: 30.0 # frekuensi loop (setara FPS kamera)
+    turn_angle_rad: 1.50 # putaran awal; wajib kalibrasi fisik
+    turn_speed_radps: 0.45
+    turn_timeout_sec: 12.0
+    reacquire_frames: 4
+    reacquire_error_threshold: 0.25
+    reacquire_search_angle_rad: 0.55
+    slow_speed_mps: 0.10
 
 odometry_node:
   ros__parameters:
@@ -34,3 +41,44 @@ odometry_node:
     path_publish_rate_hz: 2.0
     odom_frame_id: odom
     base_frame_id: base_link
+
+aruco_detector_node:
+  ros__parameters:
+    image_topic: /camera/image_raw
+    detections_topic: /aruco/detections
+    debug_topic: /aruco/debug_image
+    dictionary_id: 0 # OpenCV DICT_4X4_50
+    marker_length_m: 0.10 # sisi marker fisik dalam meter
+    # Isi hasil kalibrasi kamera: row-major 3x3 dan koefisien distorsi.
+    # Pose marker tidak diterbitkan sampai camera_matrix diisi.
+    camera_matrix:
+      [
+        791.6303995632834,
+        0.0,
+        298.40336395552043,
+        0.0,
+        793.4253270299985,
+        213.18357611530493,
+        0.0,
+        0.0,
+        1.0,
+      ]
+    distortion_coefficients:
+      [
+        -0.11057324510626881,
+        3.154720998614776,
+        -0.008027824721255019,
+        -0.005371195079737162,
+        -16.008392043727394,
+      ]
+
+mission_controller_node:
+  ros__parameters:
+    confirm_frames: 4
+    marker_clear_frames: 4
+    approach_lost_frames: 8
+    control_topic: /mission/control
+    detections_topic: /aruco/detections
+    # Ganti ID contoh sesuai marker yang dicetak dan rute lintasan.
+    # action: straight | left | right | stop
+    route_json: '[{"marker_id":1,"action":"straight","trigger_distance_m":0.35},{"marker_id":2,"action":"left","trigger_distance_m":0.35},{"marker_id":3,"action":"stop","trigger_distance_m":0.30}]'

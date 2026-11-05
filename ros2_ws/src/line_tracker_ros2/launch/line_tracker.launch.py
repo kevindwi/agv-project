@@ -49,7 +49,23 @@ def launch_setup(context, *args, **kwargs):
         parameters=[config_file],
     )
 
-    return [node, odometry_node]
+    aruco_node = Node(
+        package="line_tracker_ros2",
+        executable="aruco_detector_node",
+        name="aruco_detector_node",
+        output="screen",
+        parameters=[config_file],
+    )
+
+    mission_node = Node(
+        package="line_tracker_ros2",
+        executable="mission_controller_node",
+        name="mission_controller_node",
+        output="screen",
+        parameters=[config_file],
+    )
+
+    return [node, odometry_node, aruco_node, mission_node]
 
 
 def generate_launch_description():

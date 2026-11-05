@@ -1,0 +1,22 @@
+line_follower_node:
+  ros__parameters:
+    kp: 0.4
+    ki: 0.0
+    kd: 0.06
+    linear_speed: 0.20
+    slow_speed: 0.05
+    max_acceleration: 0.10
+    max_angular_speed: 1.0
+    roi_top_ratio: 0.70
+    roi_bottom_ratio: 0.90
+    roi_left_ratio: 0.20
+    roi_right_ratio: 0.80
+
+odometry_node:
+  ros__parameters:
+    wheel_diameter_m: 0.15
+    wheel_separation_m: 0.48
+    encoder_pulses_per_wheel_rev: 610
+    encoder_delta_topic: "/agv/encoder_delta"
+    odom_topic: "/odom"
+    path_topic: "/path"

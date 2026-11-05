@@ -1,0 +1,35 @@
+aruco_detector_node:
+  ros__parameters:
+    image_topic: "/camera/image_raw"
+    detection_topic: "/aruco/detection"
+    debug_topic: "/aruco/debug_image"
+    dictionary_id: 0 # OpenCV DICT_4X4_50
+    marker_length_m: 0.10 # 10 cm
+    # Isi dengan hasil kalibrasi Anda:
+    camera_matrix:
+      [
+        791.6303995632834,
+        0.0,
+        298.40336395552043,
+        0.0,
+        793.4253270299985,
+        213.18357611530493,
+        0.0,
+        0.0,
+        1.0,
+      ]
+    distortion_coefficients:
+      [
+        -0.11057324510626881,
+        3.154720998614776,
+        -0.008027824721255019,
+        -0.005371195079737162,
+        -16.008392043727394,
+      ]
+
+mission_controller_node:
+  ros__parameters:
+    confirm_frames: 3
+    trigger_distance_m: 0.30 # Jarak picu berhenti di checkpoint (meter)
+    slow_distance_m: 0.90    # Jarak mulai melambat dari jauh (meter)
+    route_ids: [1, 2, 3]     # Urutan checkpoint ID marker

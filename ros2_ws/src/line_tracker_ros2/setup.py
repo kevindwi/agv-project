@@ -32,6 +32,8 @@ setup(
         'console_scripts': [
             'line_tracker_node = line_tracker_ros2.line_tracker_node:main',
             'odometry_node = line_tracker_ros2.odometry_node:main',
+            'aruco_detector_node = line_tracker_ros2.aruco_detector_node:main',
+            'mission_controller_node = line_tracker_ros2.mission_controller_node:main',
         ],
     },
 )

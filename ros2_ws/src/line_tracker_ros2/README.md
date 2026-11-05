@@ -8,15 +8,17 @@ Package ROS 2 untuk sistem line tracking AGV: membaca kamera V4L2, mendeteksi ga
 line_tracker_ros2/
 ├── line_tracker_ros2/
 │   ├── __init__.py
-│   ├── line_tracker_node.py   # loop kontrol: kamera -> PID garis -> publish /cmd_vel & bridge serial
+│   ├── line_tracker_node.py   # kamera, PID, pemilik tunggal keluaran serial, manuver garis
 │   ├── odometry_node.py       # delta encoder -> /odom + TF odom/base_link + /path
+│   ├── aruco_detector_node.py # ID dan pose ArUco dari /camera/image_raw
+│   ├── mission_controller_node.py # FSM rute berbasis checkpoint ArUco
 │   ├── camera.py              # akuisisi kamera V4L2 + deteksi kontur garis (ROI)
 │   ├── pid.py                 # kontroler PID diskrit
 │   └── serial_bridge.py       # protokol serial dua arah C/E (cmd_vel & encoder delta)
 ├── config/
 │   └── line_tracker.yaml      # kalibrasi DDMR fisik, PID, dan konfigurasi serial
 ├── launch/
-│   └── line_tracker.launch.py # launch line_tracker_node dan odometry_node
+│   └── line_tracker.launch.py # launch tracker, odometri, detektor, dan FSM misi
 ├── resource/                  # ament index
 ├── test/
 ├── package.xml
@@ -66,6 +68,12 @@ Didefinisikan di [`config/line_tracker.yaml`](config/line_tracker.yaml):
 | `/line_tracker/debug_image` | `sensor_msgs/Image` | Frame debug dengan overlay ROI dan posisi garis |
 | `/cmd_vel` | `geometry_msgs/Twist` | Perintah kecepatan robot (`linear.x` m/s, `angular.z` rad/s) |
 | `/line_tracker/encoder_delta` | `std_msgs/Int64MultiArray` | Delta tick `[left, right]` dari telemetri serial firmware |
+| `/camera/image_raw` | `sensor_msgs/Image` | Frame kamera yang dibagikan ke detektor ArUco |
+| `/aruco/detections` | `std_msgs/String` | JSON berisi ID dan pose marker relatif kamera bila kamera sudah dikalibrasi |
+| `/mission/control` | `std_msgs/String` | Perintah FSM ke pemilik motor: `FOLLOW`, `LEFT`, `RIGHT`, `STOP` |
+| `/line_tracker/status` | `std_msgs/String` | Status line following/manuver untuk FSM |
+| `/mission/state` | `std_msgs/String` | Status FSM dan checkpoint yang sedang ditunggu dalam JSON |
+| `/aruco/debug_image` | `sensor_msgs/Image` | Frame kamera dengan marker yang terdeteksi |
 | `/odom` | `nav_msgs/Odometry` | Estimasi pose $(x, y, \theta)$ dan twist robot dalam frame `odom` |
 | `/path` | `nav_msgs/Path` | Jejak pose robot di frame `odom` untuk RViz |
 
@@ -102,5 +110,29 @@ ros2 launch line_tracker_ros2 line_tracker.launch.py
 # Atau override parameter via CLI
 ros2 launch line_tracker_ros2 line_tracker.launch.py camera_index:=2 serial_port:=/dev/ttyUSB0
 ```
+
+Launch menjalankan route contoh ArUco ID 1 → belok kiri, ID 2 → belok kanan, ID 3 →
+berhenti. Ubah `route_json` pada `config/line_tracker.yaml` sesuai ID marker dan jalur
+fisik. `trigger_distance_m` adalah jarak pemicu memakai kedalaman pose marker di frame
+kamera; node memperlambat robot saat marker pertama dikonfirmasi, lalu menjalankan aksi
+saat jarak mencapai ambang tersebut. Formatnya array JSON, misalnya:
+
+```yaml
+route_json: '[{"marker_id":7,"action":"straight","trigger_distance_m":0.35},{"marker_id":8,"action":"stop","trigger_distance_m":0.30}]'
+```
+
+`action` yang didukung: `straight`, `left`, `right`, `stop`. `marker_length_m` harus
+sesuai ukuran sisi marker yang dicetak. Untuk pose 3D, masukkan matriks intrinsik 3×3
+(urutan baris) dan koefisien distorsi hasil kalibrasi pada `camera_matrix` dan
+`distortion_coefficients`. Tanpa kalibrasi, node tetap menerbitkan ID untuk waypoint,
+tetapi tidak menerbitkan pose marker. Tanpa kalibrasi, mission controller memakai ID
+sebagai pemicu langsung; pasang marker di posisi pemicu yang sudah diuji secara fisik.
+
+Detektor membutuhkan OpenCV dengan modul `cv2.aruco` (build *contrib*). Node tracker
+membagikan frame kameranya sehingga kedua node tidak membuka perangkat kamera yang sama.
+Node tracker tetap menjadi satu-satunya penulis serial; mission controller meminta mode
+melalui `/mission/control`. Belokan memakai odometri untuk rotasi awal lalu mencari garis
+baru secara visual. Setel `turn_angle_rad`, kecepatan belok, dan ambang pencarian pada
+kecepatan rendah sebelum menjalankan robot di lintasan penuh.
 
 Protokol serial: [`../../../docs/serial_protocol.md`](../../../docs/serial_protocol.md).
