@@ -15,7 +15,7 @@ line_follower_node:
 odometry_node:
   ros__parameters:
     wheel_diameter_m: 0.15
-    wheel_separation_m: 0.48
+    wheel_separation_m: 0.454
     encoder_pulses_per_wheel_rev: 610
     encoder_delta_topic: "/agv/encoder_delta"
     odom_topic: "/odom"
