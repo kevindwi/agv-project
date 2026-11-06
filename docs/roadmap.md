@@ -80,8 +80,77 @@ Robot AGV berjalan otonom di lintasan bergaris (*line-guided*):
 3. Letakkan robot di lantai, beri tanda lakban di lantai sepanjang 2 meter.
 4. Buka terminal: `ros2 topic echo /odom` dan perhatikan `pose.pose.position.x`.
 5. Dorong/jalankan robot tepat 2 meter $\to$ catat nilai $X$.
-   - Jika di terminal terbaca 1.8 m (terlalu kecil), besarkan parameter `wheel_diameter_m` di `robot_params.yaml`.
+   - Jika di terminal terbaca 1.8 m (terlalu kecil), besarkan parameter `wheel_diameter_m` di `ros2_ws/src/agv_navigation/config/pid_params.yaml`.
    - Jika terbaca 2.2 m (terlalu besar), kecilkan parameter `wheel_diameter_m`.
+
+#### 4. Prosedur Kalibrasi *Wheel Track* $b$ (Uji Putar 360°):
+> **Prasyarat:** Uji jalan lurus 2 meter sudah lulus ($X \approx 2.0$ m). Jangan mengubah `wheel_diameter_m` atau `encoder_pulses_per_wheel_rev` lagi, karena kedua parameter tersebut sudah dikalibrasi.
+
+**Teori singkat:** Odometri menghitung perubahan sudut dari selisih jarak tempuh roda kiri dan kanan:
+$$\Delta\theta = \frac{D_R - D_L}{b}$$
+Sehingga untuk satu putaran fisik penuh ($\theta_{\text{fisik}} = 360^\circ = 2\pi$ rad), nilai $b$ yang benar adalah:
+$$b_{\text{baru}} = b_{\text{lama}} \times \frac{\theta_{\text{odom}}}{\theta_{\text{fisik}}}$$
+
+| Pembacaan $\theta_{\text{odom}}$ | Arti | Tindakan |
+| :--- | :--- | :--- |
+| $< 360^\circ$ (mis. 342°) | $b$ terlalu besar | Perkecil `wheel_separation_m` |
+| $> 360^\circ$ (mis. 380°) | $b$ terlalu kecil | Perbesar `wheel_separation_m` |
+| $\approx 360^\circ$ | Sudah terkalibrasi | Selesai |
+
+**Langkah pengujian:**
+1. Letakkan robot di lantai keramik yang sama dengan uji lurus. Tandai titik pusat rotasi dan satu garis acuan pada bodi robot (lakban/pointer) agar posisi 360° dapat dilihat secara visual.
+2. Jalankan hardware dan node odometri:
+   ```bash
+   # Terminal 1: hardware
+   ros2 launch agv_bringup agv_core.launch.py
+
+   # Terminal 2: odometri
+   ros2 run agv_navigation odometry_node --ros-args \
+     --params-file ros2_ws/src/agv_navigation/config/pid_params.yaml
+   ```
+3. Pantau yaw secara langsung (jangan hanya membaca `orientation.z`, karena nilainya $\sin(\theta/2)$ dan kembali 0 saat 360°):
+   ```bash
+   python3 - <<'PY'
+   import math, rclpy
+   from nav_msgs.msg import Odometry
+
+   rclpy.init()
+   node = rclpy.create_node('yaw_monitor')
+
+   def cb(msg):
+       q = msg.pose.pose.orientation
+       yaw = math.degrees(2.0 * math.atan2(q.z, q.w))
+       p = msg.pose.pose.position
+       print(f"yaw = {yaw:8.2f} deg | x = {p.x:+.3f} m | y = {p.y:+.3f} m")
+
+   node.create_subscription(Odometry, '/odom', cb, 10)
+   rclpy.spin(node)
+   PY
+   ```
+   Catat yaw awal (harus $\approx 0^\circ$ karena node baru dijalankan).
+4. Putar robot di tempat dengan kecepatan sudut rendah ($\omega \approx 0.4$ rad/s $\approx 15.7$ s per putaran):
+   ```bash
+   ros2 topic pub -r 20 /cmd_vel geometry_msgs/msg/Twist \
+     "{linear: {x: 0.0}, angular: {z: 0.4}}"
+   ```
+   Hentikan (`Ctrl+C`) tepat saat garis acuan bodi kembali sejajar dengan tanda di lantai, lalu pastikan motor berhenti:
+   ```bash
+   ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist \
+     "{linear: {x: 0.0}, angular: {z: 0.0}}"
+   ```
+5. Catat $\theta_{\text{odom}}$ pada posisi 360° tersebut, lalu hitung koreksi dengan rumus di atas. Contoh: jika odom membaca 342°:
+   $$b_{\text{baru}} = 0.48 \times \frac{342}{360} = 0.456\ \text{m}$$
+6. Ubah nilai `wheel_separation_m` pada `ros2_ws/src/agv_navigation/config/pid_params.yaml`:
+   ```yaml
+   odometry_node:
+     ros__parameters:
+       wheel_separation_m: 0.456
+   ```
+7. Restart `odometry_node` (agar yaw kembali 0) dan ulangi pengujian. Lakukan 2–3 iterasi, termasuk putaran arah sebaliknya ($\omega = -0.4$) untuk mendeteksi bias.
+
+**Kriteria lulus:** selisih $|\theta_{\text{odom}} - 360^\circ| \le 10^\circ$, serta posisi $X$ dan $Y$ tetap dekat 0 (tidak ada drift translasi berarti). Jika hasil antar-putaran berbeda jauh, penyebabnya biasanya *wheel slip* — turunkan $\omega$ atau bersihkan permukaan roda.
+
+> **Catatan:** Setelah nilai $b$ final didapat, samakan juga `WHEEL_SEPARATION_M` di `firmware/include/config.h` agar kinematika perintah $\omega$ konsisten. Ini tidak memengaruhi pembacaan odometri, tetapi membuat kecepatan putar aktual lebih sesuai perintah.
 
 ---
 

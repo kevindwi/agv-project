@@ -2,7 +2,9 @@
 
 Sumber kebenaran untuk parameter fisik dan konvensi yang dipakai bersama oleh
 firmware dan ROS 2. Jika nilai berubah, perbarui tabel di sini **dan** di
-`ros2_ws/src/line_tracker_ros2/config/line_tracker.yaml` serta `firmware/include/config.h`.
+`ros2_ws/src/agv_navigation/config/pid_params.yaml` (odometri & navigasi aktif),
+`ros2_ws/src/line_tracker_ros2/config/line_tracker.yaml` (paket lama), serta
+`firmware/include/config.h`.
 
 ## 1. Parameter fisik
 
@@ -13,24 +15,30 @@ firmware dan ROS 2. Jika nilai berubah, perbarui tabel di sini **dan** di
 | Jarak pusat roda kiri–kanan / wheel track (`b`) | 0,48 | m | 48 cm |
 | Rasio gearbox | 30:1 | – | Reduksi putaran motor ke poros roda |
 | Pulsa encoder per putaran poros motor (PPR) | 30 | pulsa/rev | Sinyal interupsi satu kanal |
-| Pulsa encoder per putaran roda (`CPR`) | 900 | pulsa/rev | 30 PPR × rasio 30:1 |
+| Pulsa encoder per putaran roda efektif (`CPR`) | 610 | pulsa/rev | Hasil kalibrasi; nominal 30 PPR × 30:1 = 900 |
 | Periode siklus kontrol & telemetri (`CONTROL_PERIOD_MS`) | 100 | ms | Frekuensi kontrol PID & serial: 10 Hz |
 | Interval sampling kecepatan akumulasi (`SPEED_READ_INTERVAL_MS`) | 1000 | ms | Interval kalkulasi RPM monitor debug |
 
 Turunan:
 
 ```text
-PULSES_PER_WHEEL_REV = PPR x gear_ratio = 30 x 30 = 900 pulsa/putaran roda
-Keliling roda        = pi x D          = pi x 0,15 ≈ 0,471239 m
-Jarak per pulsa (dt) = 0,471239 / 900  ≈ 0,0005236 m/pulsa (0,5236 mm/pulsa)
+PULSES_PER_WHEEL_REV nominal = PPR x gear_ratio = 30 x 30 = 900 pulsa/putaran roda
+CPR efektif (hasil kalibrasi) = 610 pulsa/putaran roda
+Keliling roda                 = pi x D          = pi x 0,15 ≈ 0,471239 m
+Jarak per pulsa (dt)          = 0,471239 / 610  ≈ 0,0007725 m/pulsa (0,7725 mm/pulsa)
 ```
 
 Nilai yang sama tersedia di:
 
-- ROS 2: `ros2_ws/src/line_tracker_ros2/config/line_tracker.yaml` (`wheel_diameter_m`, `wheel_separation_m`,
-  `gear_ratio`, `encoder_pulses_per_motor_rev`, `encoder_pulses_per_wheel_rev`).
+- ROS 2 (aktif): `ros2_ws/src/agv_navigation/config/pid_params.yaml` (`wheel_diameter_m`,
+  `wheel_separation_m`, `encoder_pulses_per_wheel_rev` untuk node `odometry_node`).
+- ROS 2 (paket lama): `ros2_ws/src/line_tracker_ros2/config/line_tracker.yaml`
+  (`wheel_diameter_m`, `wheel_separation_m`, `gear_ratio`, `encoder_pulses_per_motor_rev`,
+  `encoder_pulses_per_wheel_rev`).
 - Firmware: `firmware/include/config.h` (`WHEEL_DIAMETER_M`, `WHEEL_SEPARATION_M`,
   `PULSES_PER_REV`, `GEAR_RATIO`, `PULSES_PER_WHEEL_REV`, `CONTROL_PERIOD_MS`).
+  `PULSES_PER_WHEEL_REV` di firmware masih memakai nilai nominal 900; nilai efektif 610
+  di atas baru diterapkan di sisi ROS 2.
 
 ## 2. Konvensi satuan dan tanda
 
@@ -115,11 +123,14 @@ Firmware menghitung delta pulsa encoder setiap 100 ms dan mengirimkan telemetri 
 
 ### 4.3 Wheel track (uji putar 360°)
 
+> **Prasyarat:** Kalibrasi diameter efektif roda (§4.4) sudah selesai, karena perubahan diameter ikut mengubah skala pembacaan yaw.
+
 1. Letakkan robot di lantai datar dan tandai orientasi awal robot.
 2. Perintahkan putar di tempat sebanyak 360° menggunakan `cmd_vel` atau kontrol rotasi terukur.
 3. Periksa orientasi akhir pada topik `/odom` atau visualisasi RViz `TF` `odom -> base_link`.
 4. Jika robot fisik sudah berputar tepat 360° namun odometri belum mencapai $2\pi$ rad (atau sebaliknya):
-   - Koreksi parameter `wheel_separation_m` di `line_tracker.yaml` dan `firmware/include/config.h`.
+   - Koreksi parameter `wheel_separation_m` di `ros2_ws/src/agv_navigation/config/pid_params.yaml` (dan `line_tracker.yaml` bila memakai paket lama) serta `firmware/include/config.h`.
+   - Gunakan rumus $b_{\text{baru}} = b_{\text{lama}} \times \theta_{\text{odom}} / 360^\circ$. Prosedur rinci ada di `docs/roadmap.md`, Fase 1 bagian 4.
 
 ### 4.4 Diameter efektif roda (uji jalan 2 meter)
 
@@ -128,7 +139,7 @@ Firmware menghitung delta pulsa encoder setiap 100 ms dan mengirimkan telemetri 
 3. Bandingkan perpindahan $x$ pada topik `/odom` dengan jarak fisik 2 meter.
 4. Hitung diameter roda efektif terkoreksi:
    $$D_{\text{efektif}} = \frac{s_{\text{fisik}} \times \text{CPR}}{\pi \times \text{total\_pulsa}}$$
-5. Perbarui `wheel_diameter_m` di file konfigurasi jika berbeda dari $0{,}15$ m.
+5. Perbarui `wheel_diameter_m` di `ros2_ws/src/agv_navigation/config/pid_params.yaml` (dan `line_tracker.yaml` bila memakai paket lama) jika berbeda dari $0{,}15$ m, lalu ulangi kalibrasi wheel track (§4.3).
 
 ### 4.5 Pengujian E-stop
 
