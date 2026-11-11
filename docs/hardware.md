@@ -57,6 +57,7 @@ Nilai yang sama tersedia di:
   - ROS 2 → Firmware: `C,<linear_x>,<angular_z>\n` (satuan: m/s dan rad/s).
   - Firmware → ROS 2: `E,<left_ticks>,<right_ticks>\n` (satuan: pulsa tick per interval 100 ms).
 - Arah motor fisik: Motor kanan maju = `DIR_CW`, motor kiri maju = `DIR_CCW` (dikonfigurasi pada instansiasi objek `Motor` di `firmware/src/main.cpp`).
+- Pemetaan kanal driver ke sisi roda fisik pada harness saat ini tertukar; `FSM` menerima objek motor dalam urutan silang di `firmware/src/main.cpp` agar field kiri/kanan dan tanda yaw mengikuti sisi fisik. Jika kabel motor dipindah, uji lagi arah `angular.z` dan sesuaikan pemetaan tersebut.
 - `angular.z > 0` → roda kanan berputar lebih cepat daripada roda kiri (belok ke kiri).
 - Kinematika balik DDMR (dihitung di firmware):
   $$v_L = v - \frac{b \cdot \omega}{2}, \quad v_R = v + \frac{b \cdot \omega}{2}$$

@@ -225,6 +225,72 @@ $$b_{\text{baru}} = b_{\text{lama}} \times \frac{\theta_{\text{odom}}}{\theta_{\
   3. Kunci kembali ke mode pelacak garis biasa (`FOLLOW`).
 - **State Latching:** Begitu Checkpoint 1 selesai dilewati, ID 1 harus diabaikan agar robot tidak membaca ulang titik yang sama saat masih berada di dekatnya.
 
+#### 3. Implementasi yang Sudah Tersedia:
+- **`mission_controller_node`:**
+  - `route_actions: ["straight", "left", "stop"]` menentukan aksi tiap checkpoint (urutan paralel dengan `route_ids`).
+  - `transit_hold_sec` (default 0,8 s) memberi jeda melambat di checkpoint transit sebelum lanjut.
+  - `detection_timeout_sec` (default 0,5 s) mereset debouncing bila marker target hilang.
+  - `visited_ids` mengunci ID yang sudah dilewati agar tidak memicu ulang (*anti double trigger*).
+  - State misi baru: `TRANSIT`, `TURNING`, dan `ERROR`.
+- **`line_follower_node`:**
+  - Menerima perintah `/mission/control`: `FOLLOW`, `SLOW`, `STOP`, `LEFT`, `RIGHT`.
+  - `turn_angle_rad`, `turn_speed_radps`, `turn_timeout_sec` untuk putaran terkontrol berbasis yaw `/odom`.
+  - `reacquire_frames`, `reacquire_error_threshold`, `reacquire_search_angle_rad` untuk mencari dan mengunci garis cabang baru.
+  - Status `/line_follower/state`: `FOLLOWING`, `SLOWING`, `TURNING_LEFT/RIGHT`, `SEEKING_LINE`, `TURN_COMPLETE`, `TURN_FAILED`, `LINE_LOST`.
+
+#### 4. Prosedur Uji Fisik:
+1. Pastikan Fase 1–3 sudah lulus, lalu build paket yang berubah:
+   ```bash
+   cd ~/dev/agv-project/ros2_ws
+   source /opt/ros/jazzy/setup.bash
+   source install/setup.bash
+   colcon build --packages-select agv_navigation agv_mission --symlink-install
+   ```
+2. Sesuaikan rute di `ros2_ws/src/agv_mission/config/route_scenario.yaml`:
+   ```yaml
+   route_ids: [1, 2, 3]
+   route_actions: ["straight", "left", "stop"]  # ganti "left" -> "right" bila cabang ke kanan
+   transit_hold_sec: 0.8
+   ```
+   Sesuaikan juga `turn_angle_rad` di `ros2_ws/src/agv_navigation/config/pid_params.yaml` dengan sudut cabang fisik (90° = 1,57 rad).
+3. Jalankan sistem (5 terminal):
+   ```bash
+   # Terminal 1: kamera + serial
+   ros2 launch agv_bringup agv_core.launch.py
+
+   # Terminal 2: line follower
+   ros2 run agv_navigation line_follower_node --ros-args \
+     --params-file ros2_ws/src/agv_navigation/config/pid_params.yaml
+
+   # Terminal 3: odometri
+   ros2 run agv_navigation odometry_node --ros-args \
+     --params-file ros2_ws/src/agv_navigation/config/pid_params.yaml
+
+   # Terminal 4: detektor ArUco
+   ros2 run agv_mission aruco_detector_node --ros-args \
+     --params-file ros2_ws/src/agv_mission/config/route_scenario.yaml
+
+   # Terminal 5: mission controller
+   ros2 run agv_mission mission_controller_node --ros-args \
+     --params-file ros2_ws/src/agv_mission/config/route_scenario.yaml
+   ```
+4. Pantau topik berikut selama pengujian:
+   ```bash
+   ros2 topic echo /mission/state      # NAVIGATING/APPROACHING/TRANSIT/TURNING/ARRIVED
+   ros2 topic echo /mission/control    # FOLLOW/SLOW/LEFT/RIGHT/STOP
+   ros2 topic echo /line_follower/state
+   ros2 topic echo /odom --field pose.pose.position
+   ```
+5. **CP1 (straight):** robot melambat (`APPROACHING`) $\to$ jeda `TRANSIT` $\to$ kembali `NAVIGATING`. Pastikan ID 1 tidak memicu ulang setelah dilewati.
+6. **CP2 (left/right):** robot berhenti di persimpangan $\to$ state `TURNING` $\to$ berputar sebesar `turn_angle_rad` $\to$ `SEEKING_LINE` $\to$ `TURN_COMPLETE` $\to$ kembali `NAVIGATING`.
+7. **CP3 (stop):** state `ARRIVED`, perintah `STOP`, robot melandai berhenti total.
+8. **Tuning bila gagal:**
+   - Robot berhenti sebelum/melewati cabang $\to$ koreksi `turn_angle_rad`.
+   - Garis cabang tidak terkunci $\to$ perlebar `reacquire_error_threshold` atau perbesar `reacquire_search_angle_rad`.
+   - Terlalu agresif saat belok $\to$ turunkan `turn_speed_radps`.
+
+**Kriteria lulus:** urutan CP1 $\to$ CP2 $\to$ CP3 berjalan tanpa double trigger, robot berhasil mengunci garis cabang setelah belok, dan berhenti tepat di CP3.
+
 ---
 
 ### 🔵 FASE 5: Monitoring Telemetri & Kontrol IoT

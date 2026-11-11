@@ -31,15 +31,15 @@
 
 - [x] **Validasi Arah Gerak Motor:**
   - [x] Perintah `/cmd_vel` linier positif memutar kedua roda ke arah depan (*forward*).
-  - [x] Perintah putar sudut $\omega$ memutar robot ke arah yang benar (kiri CCW, kanan CW).
+  - [ ] Verifikasi ulang arah putar setelah pemetaan kanal FSM ditukar: `angular.z` positif harus berputar kiri (CCW), negatif kanan (CW).
 - [x] **Kalibrasi Odometri Jalan Lurus (2.00 Meter):**
   - [x] Uji jalan lurus 2.0 meter di lantai keramik.
   - [x] Kalibrasi CPR encoder: disesuaikan dari 900 ke **610 pulsa/putaran** (`encoder_pulses_per_wheel_rev: 610`).
   - [x] Nilai $X$ di topik `/odom` terbaca tepat **2.00 meter** saat robot menempuh 2 meter fisik.
-- [ ] **Kalibrasi Odometri Uji Putar 360° (*Wheel Track* $b$):**
-  - [ ] Putar robot di tempat 1 putaran penuh ($360^\circ = 6.283 \text{ rad}$).
-  - [ ] Pastikan orientasi yaw di `/odom` kembali ke $\approx 0$ atau $\approx 6.28 \text{ rad}$.
-  - [ ] Sesuaikan parameter `wheel_separation_m` di `pid_params.yaml` jika ada selisih sudut.
+- [x] **Kalibrasi Odometri Uji Putar 360° (*Wheel Track* $b$):**
+  - [x] Putar robot di tempat 1 putaran penuh ($360^\circ = 6.283 \text{ rad}$).
+  - [x] Yaw `/odom` terbaca **358,59°** pada putaran fisik 360° (error 1,41°, lolos toleransi ±10°).
+  - [x] `wheel_separation_m` disesuaikan ke **0,454** di `pid_params.yaml`.
 
 ---
 
