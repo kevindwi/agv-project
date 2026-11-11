@@ -1,11 +1,12 @@
 """Node serial bridge: jembatan komunikasi non-blocking antara ROS 2 dan firmware motor AGV."""
 
 import time
-from geometry_msgs.msg import Twist
+
 import rclpy
+import serial
+from geometry_msgs.msg import Twist
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-import serial
 from std_msgs.msg import Int64MultiArray
 
 
@@ -31,7 +32,9 @@ class SerialBridgeNode(Node):
         self.last_idle_heartbeat = 0.0
 
         # Publisher encoder
-        self.encoder_publisher = self.create_publisher(Int64MultiArray, encoder_topic, 10)
+        self.encoder_publisher = self.create_publisher(
+            Int64MultiArray, encoder_topic, 10
+        )
         self.legacy_encoder_publisher = self.create_publisher(
             Int64MultiArray, "/line_tracker/encoder_delta", 10
         )
@@ -49,7 +52,9 @@ class SerialBridgeNode(Node):
             # timeout=0 agar pembacaan serial murni non-blocking tanpa membuat loop ROS macet
             self._serial = serial.Serial(self.port, self.baud_rate, timeout=0)
             time.sleep(1.0)
-            self.get_logger().info(f"Terhubung ke serial hardware: {self.port} @ {self.baud_rate}")
+            self.get_logger().info(
+                f"Terhubung ke serial hardware: {self.port} @ {self.baud_rate}"
+            )
         except OSError as e:
             self.get_logger().warn(f"Belum dapat membuka serial port {self.port}: {e}")
             self._serial = None

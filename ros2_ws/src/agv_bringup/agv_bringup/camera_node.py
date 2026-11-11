@@ -5,7 +5,22 @@ from cv_bridge import CvBridge
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import (
+    DurabilityPolicy,
+    HistoryPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+)
 from sensor_msgs.msg import Image
+
+
+IMAGE_QOS = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+    # Reliable cocok dengan ros2 topic hz / image viewer, antrean tetap satu frame.
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.VOLATILE,
+)
 
 
 class CameraNode(Node):
@@ -16,16 +31,21 @@ class CameraNode(Node):
         self.declare_parameter("frame_width", 640)
         self.declare_parameter("frame_height", 480)
         self.declare_parameter("fps", 30.0)
+        self.declare_parameter("pixel_format", "MJPG")
         self.declare_parameter("image_topic", "/camera/image_raw")
 
         self.camera_index = int(self.get_parameter("camera_index").value)
         self.frame_width = int(self.get_parameter("frame_width").value)
         self.frame_height = int(self.get_parameter("frame_height").value)
         self.fps = float(self.get_parameter("fps").value)
+        self.pixel_format = str(self.get_parameter("pixel_format").value).strip().upper()
         image_topic = str(self.get_parameter("image_topic").value)
 
         self.bridge = CvBridge()
-        self.image_publisher = self.create_publisher(Image, image_topic, 10)
+        # Video adalah data terbaru; jangan menumpuk frame lama saat konsumen sibuk.
+        self.image_publisher = self.create_publisher(
+            Image, image_topic, IMAGE_QOS
+        )
 
         self.capture = None
         self._init_camera()
@@ -45,10 +65,33 @@ class CameraNode(Node):
             self.get_logger().warn(f"Belum dapat membuka kamera pada index {self.camera_index}. Menunggu...")
             return
 
+        if len(self.pixel_format) == 4:
+            fourcc = cv2.VideoWriter_fourcc(*self.pixel_format)
+            if not self.capture.set(cv2.CAP_PROP_FOURCC, fourcc):
+                self.get_logger().warning(
+                    f"Kamera menolak format {self.pixel_format}; memakai format default driver."
+                )
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
         self.capture.set(cv2.CAP_PROP_FPS, self.fps)
-        self.get_logger().info(f"Kamera index {self.camera_index} berhasil dibuka.")
+        # Minta V4L2 menyimpan sesedikit mungkin frame agar read() memberi frame baru.
+        self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        actual_width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        actual_fps = self.capture.get(cv2.CAP_PROP_FPS)
+        actual_fourcc = int(self.capture.get(cv2.CAP_PROP_FOURCC))
+        actual_format = "".join(
+            chr((actual_fourcc >> (8 * i)) & 0xFF) for i in range(4)
+        )
+        self.get_logger().info(
+            f"Kamera index={self.camera_index}, mode={actual_width}x{actual_height} "
+            f"@ {actual_fps:.1f} FPS, format={actual_format!r} (diminta {self.pixel_format})."
+        )
+        if len(self.pixel_format) == 4 and actual_format != self.pixel_format:
+            self.get_logger().warning(
+                f"Format aktual {actual_format!r} berbeda dari permintaan "
+                f"{self.pixel_format!r}; periksa mode yang didukung kamera."
+            )
 
     def timer_callback(self):
         if self.capture is None or not self.capture.isOpened():
