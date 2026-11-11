@@ -5,15 +5,17 @@ aruco_detector_node:
     debug_topic: "/aruco/debug_image"
     dictionary_id: 0 # OpenCV DICT_4X4_50
     marker_length_m: 0.10 # 10 cm
-    # Isi dengan hasil kalibrasi Anda:
+    processing_fps: 20.0 # Sedikit di atas kamera agar jitter tidak membuang frame
+    debug_publish_rate_hz: 10.0 # Batasi gambar debug agar tidak membebani kamera
+    # Matriks 640x480 diskalakan 0.5 untuk mode kamera 320x240.
     camera_matrix:
       [
-        791.6303995632834,
+        395.8151997816417,
         0.0,
-        298.40336395552043,
+        149.20168197776022,
         0.0,
-        793.4253270299985,
-        213.18357611530493,
+        396.71266351499925,
+        106.59178805765247,
         0.0,
         0.0,
         1.0,
@@ -31,5 +33,18 @@ mission_controller_node:
   ros__parameters:
     confirm_frames: 3
     trigger_distance_m: 0.30 # Jarak picu berhenti di checkpoint (meter)
-    slow_distance_m: 0.90    # Jarak mulai melambat dari jauh (meter)
-    route_ids: [1, 2, 3]     # Urutan checkpoint ID marker
+    slow_distance_m: 0.90 # Jarak mulai melambat dari jauh (meter)
+    detection_timeout_sec: 0.5 # Reset debouncing bila marker hilang > 0.5 s
+    route_ids: [1, 2, 3] # Urutan checkpoint ID marker
+    # Aksi per checkpoint: straight | left | right | stop
+    route_actions: ["straight", "left", "stop"]
+
+    # route_ids: [1, 2] # Urutan checkpoint ID marker
+    # # Aksi per checkpoint: straight | left | right | stop
+    # route_actions: ["left", "stop"]
+
+    transit_hold_sec: 0.8 # Jeda melambat di CP1 sebelum lanjut
+    control_topic: "/mission/control"
+    detection_topic: "/aruco/detection"
+    line_status_topic: "/line_follower/state"
+    fail_on_line_lost: false # true = misi ERROR saat garis hilang total

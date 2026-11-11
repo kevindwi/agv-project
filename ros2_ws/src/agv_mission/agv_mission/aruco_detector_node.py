@@ -1,14 +1,30 @@
 """Deteksi ArUco marker dan publikasi pesan ArucoDetection terstruktur."""
 
+import time
+
 import cv2
 from cv_bridge import CvBridge
 import numpy as np
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import (
+    DurabilityPolicy,
+    HistoryPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+)
 from sensor_msgs.msg import Image
 
 from agv_interfaces.msg import ArucoDetection
+
+
+IMAGE_QOS = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+)
 
 
 class ArucoDetectorNode(Node):
@@ -20,10 +36,21 @@ class ArucoDetectorNode(Node):
         self.declare_parameter("debug_topic", "/aruco/debug_image")
         self.declare_parameter("dictionary_id", 0)  # DICT_4X4_50
         self.declare_parameter("marker_length_m", 0.10)
+        self.declare_parameter("processing_fps", 20.0)
+        self.declare_parameter("debug_publish_rate_hz", 5.0)
         self.declare_parameter("camera_matrix", [0.0] * 9)
         self.declare_parameter("distortion_coefficients", [0.0] * 5)
 
         self.marker_length = float(self.get_parameter("marker_length_m").value)
+        cv2.setNumThreads(1)
+        self.processing_fps = max(
+            1.0, float(self.get_parameter("processing_fps").value)
+        )
+        self.debug_publish_rate = max(
+            0.0, float(self.get_parameter("debug_publish_rate_hz").value)
+        )
+        self.last_process_time = 0.0
+        self.last_debug_publish_time = 0.0
         dictionary_id = int(self.get_parameter("dictionary_id").value)
 
         if not hasattr(cv2, "aruco"):
@@ -49,9 +76,11 @@ class ArucoDetectorNode(Node):
         image_topic = str(self.get_parameter("image_topic").value)
 
         self.detection_publisher = self.create_publisher(ArucoDetection, detection_topic, 10)
-        self.debug_publisher = self.create_publisher(Image, debug_topic, 5)
+        self.debug_publisher = self.create_publisher(Image, debug_topic, 1)
 
-        self.create_subscription(Image, image_topic, self.image_callback, 5)
+        self.create_subscription(
+            Image, image_topic, self.image_callback, IMAGE_QOS
+        )
         self.get_logger().info(f"ArucoDetectorNode aktif. Subscribed ke {image_topic}")
 
     def _parse_matrix(self, name: str, shape: tuple):
@@ -64,6 +93,11 @@ class ArucoDetectorNode(Node):
         return arr
 
     def image_callback(self, msg: Image):
+        now = time.monotonic()
+        if now - self.last_process_time < 1.0 / self.processing_fps:
+            return
+        self.last_process_time = now
+
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
         except Exception as e:
@@ -78,11 +112,21 @@ class ArucoDetectorNode(Node):
                 gray, self.dictionary, parameters=self.detector_parameters
             )
 
-        debug_img = frame.copy()
+        debug_img = None
+        debug_period = (
+            1.0 / self.debug_publish_rate if self.debug_publish_rate > 0.0 else float("inf")
+        )
+        publish_debug = (
+            self.debug_publisher.get_subscription_count() > 0
+            and now - self.last_debug_publish_time >= debug_period
+        )
+        if publish_debug:
+            debug_img = frame.copy()
 
         if ids is not None and len(ids) > 0:
             flat_ids = ids.flatten()
-            self.aruco.drawDetectedMarkers(debug_img, corners, ids)
+            if debug_img is not None:
+                self.aruco.drawDetectedMarkers(debug_img, corners, ids)
 
             for i, marker_id in enumerate(flat_ids):
                 marker_corners = corners[i][0]
@@ -95,11 +139,11 @@ class ArucoDetectorNode(Node):
                         [corners[i]], self.marker_length, self.camera_matrix, dist_coeffs
                     )
                     dist_z = float(tvecs[0][0][2])
-                    # Gambar sumbu 3D
-                    cv2.drawFrameAxes(
-                        debug_img, self.camera_matrix, dist_coeffs,
-                        rvecs[0], tvecs[0], self.marker_length * 0.5
-                    )
+                    if debug_img is not None:
+                        cv2.drawFrameAxes(
+                            debug_img, self.camera_matrix, dist_coeffs,
+                            rvecs[0], tvecs[0], self.marker_length * 0.5
+                        )
                 else:
                     # 2. Estimasi geometri sederhana jika belum kalibrasi
                     # Jarak Z ~ (focal_length * real_width) / pixel_width
@@ -114,21 +158,26 @@ class ArucoDetectorNode(Node):
                 self.detection_publisher.publish(det_msg)
 
                 # Overlay teks di debug image
-                c = marker_corners[0]
-                cv2.putText(
-                    debug_img,
-                    f"ID: {marker_id} | Dist: {dist_z:.2f}m",
-                    (int(c[0]), int(c[1]) - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 255),
-                    2,
-                )
+                if debug_img is not None:
+                    c = marker_corners[0]
+                    cv2.putText(
+                        debug_img,
+                        f"ID: {marker_id} | Dist: {dist_z:.2f}m",
+                        (int(c[0]), int(c[1]) - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 255, 255),
+                        2,
+                    )
 
-        try:
-            self.debug_publisher.publish(self.bridge.cv2_to_imgmsg(debug_img, encoding="bgr8"))
-        except Exception:
-            pass
+        if debug_img is not None:
+            try:
+                self.debug_publisher.publish(
+                    self.bridge.cv2_to_imgmsg(debug_img, encoding="bgr8")
+                )
+                self.last_debug_publish_time = now
+            except Exception:
+                pass
 
 
 def main(args=None):
