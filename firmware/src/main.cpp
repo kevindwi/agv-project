@@ -10,7 +10,7 @@ Motor motorRight(R_START_STOP, R_RUN_BRAKE, R_DIR, R_INT_VR, R_PWM, R_SPEED_OUT,
                  DIR_CW);
 Motor motorLeft(L_START_STOP, L_RUN_BRAKE, L_DIR, L_INT_VR, L_PWM, L_SPEED_OUT,
                 DIR_CCW);
-FSM fsm(motorRight, motorLeft);
+FSM fsm(motorLeft, motorRight);
 
 void handleButtons();
 

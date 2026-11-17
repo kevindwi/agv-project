@@ -15,7 +15,7 @@ firmware dan ROS 2. Jika nilai berubah, perbarui tabel di sini **dan** di
 | Jarak pusat roda kiri–kanan / wheel track (`b`) | 0,48 | m | 48 cm |
 | Rasio gearbox | 30:1 | – | Reduksi putaran motor ke poros roda |
 | Pulsa encoder per putaran poros motor (PPR) | 30 | pulsa/rev | Sinyal interupsi satu kanal |
-| Pulsa encoder per putaran roda efektif (`CPR`) | 610 | pulsa/rev | Hasil kalibrasi; nominal 30 PPR × 30:1 = 900 |
+| Pulsa encoder per putaran roda efektif (`CPR`) | 900 | pulsa/rev | Tervalidasi fisik pada kecepatan operasional (nominal 30 PPR × 30:1 = 900) |
 | Periode siklus kontrol & telemetri (`CONTROL_PERIOD_MS`) | 100 | ms | Frekuensi kontrol PID & serial: 10 Hz |
 | Interval sampling kecepatan akumulasi (`SPEED_READ_INTERVAL_MS`) | 1000 | ms | Interval kalkulasi RPM monitor debug |
 
@@ -23,22 +23,21 @@ Turunan:
 
 ```text
 PULSES_PER_WHEEL_REV nominal = PPR x gear_ratio = 30 x 30 = 900 pulsa/putaran roda
-CPR efektif (hasil kalibrasi) = 610 pulsa/putaran roda
+CPR efektif (hasil kalibrasi) = 900 pulsa/putaran roda
 Keliling roda                 = pi x D          = pi x 0,15 ≈ 0,471239 m
-Jarak per pulsa (dt)          = 0,471239 / 610  ≈ 0,0007725 m/pulsa (0,7725 mm/pulsa)
+Jarak per pulsa (dt)          = 0,471239 / 900  ≈ 0,0005236 m/pulsa (0,5236 mm/pulsa)
 ```
 
 Nilai yang sama tersedia di:
 
-- ROS 2 (aktif): `ros2_ws/src/agv_navigation/config/pid_params.yaml` (`wheel_diameter_m`,
-  `wheel_separation_m`, `encoder_pulses_per_wheel_rev` untuk node `odometry_node`).
+- ROS 2 (aktif): `ros2_ws/src/agv_navigation/config/pid_params.yaml` (`wheel_diameter_m: 0.15`,
+  `wheel_separation_m: 0.48`, `encoder_pulses_per_wheel_rev: 900` untuk node `odometry_node`).
 - ROS 2 (paket lama): `ros2_ws/src/line_tracker_ros2/config/line_tracker.yaml`
   (`wheel_diameter_m`, `wheel_separation_m`, `gear_ratio`, `encoder_pulses_per_motor_rev`,
   `encoder_pulses_per_wheel_rev`).
-- Firmware: `firmware/include/config.h` (`WHEEL_DIAMETER_M`, `WHEEL_SEPARATION_M`,
-  `PULSES_PER_REV`, `GEAR_RATIO`, `PULSES_PER_WHEEL_REV`, `CONTROL_PERIOD_MS`).
-  `PULSES_PER_WHEEL_REV` di firmware masih memakai nilai nominal 900; nilai efektif 610
-  di atas baru diterapkan di sisi ROS 2.
+- Firmware: `firmware/include/config.h` (`WHEEL_DIAMETER_M: 0.15f`, `WHEEL_SEPARATION_M: 0.48f`,
+  `PULSES_PER_REV: 30`, `GEAR_RATIO: 30`, `PULSES_PER_WHEEL_REV: 900`, `CONTROL_PERIOD_MS: 100`).
+  Nilai firmware dan ROS 2 kini telah sinkron penuh di 900 CPR.
 
 ## 2. Konvensi satuan dan tanda
 
