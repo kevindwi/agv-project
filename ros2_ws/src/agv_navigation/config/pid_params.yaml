@@ -25,8 +25,32 @@ line_follower_node:
 odometry_node:
   ros__parameters:
     wheel_diameter_m: 0.15
-    wheel_separation_m: 0.454
-    encoder_pulses_per_wheel_rev: 610
+    wheel_separation_m: 0.48
+    encoder_pulses_per_wheel_rev: 900
     encoder_delta_topic: "/agv/encoder_delta"
     odom_topic: "/odom"
     path_topic: "/path"
+
+goal_follower_node:
+  ros__parameters:
+    odom_frame_id: "odom"
+    base_frame_id: "base_link"
+    goal_topic: "/goal_pose"
+    odom_topic: "/odom"
+    cmd_vel_topic: "/cmd_vel"
+    status_topic: "/goal_follower/state"
+    marker_topic: "/goal_follower/active_goal_marker"
+    kp_linear: 0.5
+    kp_angular: 1.2
+    max_linear_speed: 0.15
+    min_linear_speed: 0.04
+    max_angular_speed: 0.60
+    min_angular_speed: 0.12
+    max_linear_accel: 0.15
+    max_angular_accel: 0.80
+    xy_goal_tolerance: 0.05
+    yaw_goal_tolerance: 0.10
+    heading_tolerance_to_drive: 0.30
+    align_final_yaw: true
+    goal_timeout_sec: 60.0
+    control_rate_hz: 20.0

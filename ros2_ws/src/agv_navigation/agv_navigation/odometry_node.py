@@ -1,17 +1,18 @@
-"""Estimasi odometri DDMR dari delta encoder dan publikasi odom serta TF."""
+"""Estimasi odometri DDMR dari delta encoder dan publikasi odom, TF, dan visualisasi 3D robot."""
 
 import math
-from geometry_msgs.msg import PoseStamped, TransformStamped
+from geometry_msgs.msg import Point, PoseStamped, TransformStamped
 from nav_msgs.msg import Odometry, Path
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Int64MultiArray
 from tf2_ros import TransformBroadcaster
+from visualization_msgs.msg import Marker, MarkerArray
 
 
 class OdometryNode(Node):
-    """Integrasikan tick encoder menjadi pose global odom."""
+    """Integrasikan tick encoder menjadi pose odom, menyiarkan TF, dan menerbitkan visualisasi robot."""
 
     def __init__(self):
         super().__init__("odometry_node")
@@ -21,8 +22,10 @@ class OdometryNode(Node):
         self.declare_parameter("encoder_delta_topic", "/agv/encoder_delta")
         self.declare_parameter("odom_topic", "/odom")
         self.declare_parameter("path_topic", "/path")
+        self.declare_parameter("marker_topic", "/robot_marker")
         self.declare_parameter("max_path_poses", 10000)
         self.declare_parameter("path_publish_rate_hz", 2.0)
+        self.declare_parameter("odom_publish_rate_hz", 20.0)
         self.declare_parameter("odom_frame_id", "odom")
         self.declare_parameter("base_frame_id", "base_link")
 
@@ -35,16 +38,22 @@ class OdometryNode(Node):
         encoder_topic = str(self.get_parameter("encoder_delta_topic").value)
         odom_topic = str(self.get_parameter("odom_topic").value)
         path_topic = str(self.get_parameter("path_topic").value)
+        marker_topic = str(self.get_parameter("marker_topic").value)
         self.max_path_poses = int(self.get_parameter("max_path_poses").value)
         path_publish_rate = float(self.get_parameter("path_publish_rate_hz").value)
+        odom_publish_rate = float(self.get_parameter("odom_publish_rate_hz").value)
 
         self.x = 0.0
         self.y = 0.0
         self.theta = 0.0
-        self.last_stamp = None
+        self.linear_velocity = 0.0
+        self.angular_velocity = 0.0
+        self.last_encoder_time = None
 
         self.odom_publisher = self.create_publisher(Odometry, odom_topic, 10)
         self.path_publisher = self.create_publisher(Path, path_topic, 10)
+        self.marker_publisher = self.create_publisher(MarkerArray, marker_topic, 10)
+
         self.path = Path()
         self.path.header.frame_id = self.odom_frame_id
         self.transform_broadcaster = TransformBroadcaster(self)
@@ -52,7 +61,11 @@ class OdometryNode(Node):
         self.encoder_subscription = self.create_subscription(
             Int64MultiArray, encoder_topic, self.encoder_callback, 10
         )
+
+        # Timer periodik: Memastikan TF dan Odometry selalu aktif & realtime di RViz bahkan saat diam
+        self.odom_timer = self.create_timer(1.0 / odom_publish_rate, self.publish_odom_and_tf)
         self.path_timer = self.create_timer(1.0 / path_publish_rate, self.publish_path)
+
         self.get_logger().info(
             f"Odometri aktif: {encoder_topic} -> {odom_topic}, TF {self.odom_frame_id} -> {self.base_frame_id}"
         )
@@ -73,18 +86,37 @@ class OdometryNode(Node):
         self.y += delta_distance * math.sin(midpoint_theta)
         self.theta += delta_theta
 
+        now_seconds = self.get_clock().now().nanoseconds * 1e-9
+        dt = None if self.last_encoder_time is None else now_seconds - self.last_encoder_time
+        self.last_encoder_time = now_seconds
+
+        self.linear_velocity = 0.0 if dt is None or dt <= 0.0 else delta_distance / dt
+        self.angular_velocity = 0.0 if dt is None or dt <= 0.0 else delta_theta / dt
+
+        # Rekam jejak pose ke path
+        pose_stamped = PoseStamped()
+        pose_stamped.header.stamp = self.get_clock().now().to_msg()
+        pose_stamped.header.frame_id = self.odom_frame_id
+        pose_stamped.pose.position.x = self.x
+        pose_stamped.pose.position.y = self.y
+        half_theta = self.theta / 2.0
+        pose_stamped.pose.orientation.z = math.sin(half_theta)
+        pose_stamped.pose.orientation.w = math.cos(half_theta)
+        self.path.poses.append(pose_stamped)
+        if len(self.path.poses) > self.max_path_poses:
+            self.path.poses = self.path.poses[-self.max_path_poses:]
+
+        # Publikasikan segera
+        self.publish_odom_and_tf()
+
+    def publish_odom_and_tf(self):
+        """Siarkan TF odom -> base_link, publikasikan /odom, dan marker 3D robot."""
         stamp = self.get_clock().now().to_msg()
-        now_seconds = stamp.sec + stamp.nanosec * 1e-9
-        dt = None if self.last_stamp is None else now_seconds - self.last_stamp
-        self.last_stamp = now_seconds
-
-        linear_velocity = 0.0 if dt is None or dt <= 0.0 else delta_distance / dt
-        angular_velocity = 0.0 if dt is None or dt <= 0.0 else delta_theta / dt
-
         half_theta = self.theta / 2.0
         qz = math.sin(half_theta)
         qw = math.cos(half_theta)
 
+        # 1. Pesan Odometry
         odom = Odometry()
         odom.header.stamp = stamp
         odom.header.frame_id = self.odom_frame_id
@@ -93,10 +125,11 @@ class OdometryNode(Node):
         odom.pose.pose.position.y = self.y
         odom.pose.pose.orientation.z = qz
         odom.pose.pose.orientation.w = qw
-        odom.twist.twist.linear.x = linear_velocity
-        odom.twist.twist.angular.z = angular_velocity
+        odom.twist.twist.linear.x = self.linear_velocity
+        odom.twist.twist.angular.z = self.angular_velocity
         self.odom_publisher.publish(odom)
 
+        # 2. Siaran TF Transform
         transform = TransformStamped()
         transform.header.stamp = stamp
         transform.header.frame_id = self.odom_frame_id
@@ -107,12 +140,100 @@ class OdometryNode(Node):
         transform.transform.rotation.w = qw
         self.transform_broadcaster.sendTransform(transform)
 
-        pose_stamped = PoseStamped()
-        pose_stamped.header = odom.header
-        pose_stamped.pose = odom.pose.pose
-        self.path.poses.append(pose_stamped)
-        if len(self.path.poses) > self.max_path_poses:
-            self.path.poses = self.path.poses[-self.max_path_poses:]
+        # 3. Visualisasi Marker 3D Robot di RViz
+        self._publish_robot_markers(stamp)
+
+    def _publish_robot_markers(self, stamp):
+        """Buat visualisasi bentuk fisik robot dan panah arah hadap di RViz."""
+        marker_array = MarkerArray()
+
+        # Marker 1: Bodi / Sasis Robot (Box biru transparan)
+        chassis = Marker()
+        chassis.header.stamp = stamp
+        chassis.header.frame_id = self.base_frame_id
+        chassis.ns = "robot_model"
+        chassis.id = 0
+        chassis.type = Marker.CUBE
+        chassis.action = Marker.ADD
+        chassis.pose.position.x = 0.0
+        chassis.pose.position.y = 0.0
+        chassis.pose.position.z = 0.08  # Posisi tengah ketinggian sasis
+        chassis.pose.orientation.w = 1.0
+        chassis.scale.x = 0.50  # Panjang 50 cm
+        chassis.scale.y = 0.45  # Lebar 45 cm
+        chassis.scale.z = 0.12  # Tinggi 12 cm
+        chassis.color.r = 0.1
+        chassis.color.g = 0.5
+        chassis.color.b = 0.9
+        chassis.color.a = 0.75
+        marker_array.markers.append(chassis)
+
+        # Marker 2: Panah Arah Hadap Robot (Arrow kuning terang menunjuk ke depan +X)
+        heading_arrow = Marker()
+        heading_arrow.header.stamp = stamp
+        heading_arrow.header.frame_id = self.base_frame_id
+        heading_arrow.ns = "robot_heading"
+        heading_arrow.id = 1
+        heading_arrow.type = Marker.ARROW
+        heading_arrow.action = Marker.ADD
+        heading_arrow.points = [
+            Point(x=0.0, y=0.0, z=0.15),
+            Point(x=0.45, y=0.0, z=0.15),
+        ]
+        heading_arrow.scale.x = 0.05  # Diameter batang
+        heading_arrow.scale.y = 0.10  # Diameter kepala panah
+        heading_arrow.scale.z = 0.10  # Panjang kepala panah
+        heading_arrow.color.r = 1.0
+        heading_arrow.color.g = 0.9
+        heading_arrow.color.b = 0.0
+        heading_arrow.color.a = 1.0
+        marker_array.markers.append(heading_arrow)
+
+        # Marker 3: Roda Kiri (Cylinder hitam di sisi kiri)
+        wheel_left = Marker()
+        wheel_left.header.stamp = stamp
+        wheel_left.header.frame_id = self.base_frame_id
+        wheel_left.ns = "robot_wheels"
+        wheel_left.id = 2
+        wheel_left.type = Marker.CYLINDER
+        wheel_left.action = Marker.ADD
+        wheel_left.pose.position.x = 0.0
+        wheel_left.pose.position.y = self.wheel_separation / 2.0
+        wheel_left.pose.position.z = self.wheel_diameter / 2.0
+        wheel_left.pose.orientation.x = 0.7071
+        wheel_left.pose.orientation.w = 0.7071
+        wheel_left.scale.x = self.wheel_diameter
+        wheel_left.scale.y = self.wheel_diameter
+        wheel_left.scale.z = 0.05
+        wheel_left.color.r = 0.15
+        wheel_left.color.g = 0.15
+        wheel_left.color.b = 0.15
+        wheel_left.color.a = 1.0
+        marker_array.markers.append(wheel_left)
+
+        # Marker 4: Roda Kanan (Cylinder hitam di sisi kanan)
+        wheel_right = Marker()
+        wheel_right.header.stamp = stamp
+        wheel_right.header.frame_id = self.base_frame_id
+        wheel_right.ns = "robot_wheels"
+        wheel_right.id = 3
+        wheel_right.type = Marker.CYLINDER
+        wheel_right.action = Marker.ADD
+        wheel_right.pose.position.x = 0.0
+        wheel_right.pose.position.y = -self.wheel_separation / 2.0
+        wheel_right.pose.position.z = self.wheel_diameter / 2.0
+        wheel_right.pose.orientation.x = 0.7071
+        wheel_right.pose.orientation.w = 0.7071
+        wheel_right.scale.x = self.wheel_diameter
+        wheel_right.scale.y = self.wheel_diameter
+        wheel_right.scale.z = 0.05
+        wheel_right.color.r = 0.15
+        wheel_right.color.g = 0.15
+        wheel_right.color.b = 0.15
+        wheel_right.color.a = 1.0
+        marker_array.markers.append(wheel_right)
+
+        self.marker_publisher.publish(marker_array)
 
     def publish_path(self):
         if not self.path.poses:
