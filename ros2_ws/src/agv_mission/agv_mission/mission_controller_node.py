@@ -1,6 +1,8 @@
 """State Machine Misi: mengendalikan rute AGV berdasarkan deteksi ArUco."""
 
 import time
+import json
+import math
 
 import rclpy
 from rclpy.executors import ExternalShutdownException
@@ -20,6 +22,8 @@ class MissionControllerNode(Node):
         # Parameter rute & deteksi
         self.declare_parameter("confirm_frames", 3)
         self.declare_parameter("trigger_distance_m", 0.35)
+        self.declare_parameter("center_tolerance_m", 0.05)  # default 5 cm tolerance
+        
         self.declare_parameter("slow_distance_m", 0.70)
         self.declare_parameter("route_ids", [1, 2, 3])
         # Default harus berupa STRING_ARRAY (bukan list kosong) agar tipe parameter
@@ -30,7 +34,8 @@ class MissionControllerNode(Node):
         self.declare_parameter("control_topic", "/mission/control")
         self.declare_parameter("detection_topic", "/aruco/detection")
         self.declare_parameter("line_status_topic", "/line_follower/state")
-        self.declare_parameter("fail_on_line_lost", False)
+                
+        
 
         self.confirm_frames = max(1, int(self.get_parameter("confirm_frames").value))
         self.trigger_distance = float(self.get_parameter("trigger_distance_m").value)
@@ -40,6 +45,7 @@ class MissionControllerNode(Node):
             0.05, float(self.get_parameter("detection_timeout_sec").value)
         )
         self.fail_on_line_lost = bool(self.get_parameter("fail_on_line_lost").value)
+        self.center_tolerance = float(self.get_parameter('center_tolerance_m').value)
 
         if self.trigger_distance <= 0.0:
             raise ValueError("trigger_distance_m harus positif")
@@ -141,6 +147,19 @@ class MissionControllerNode(Node):
 
         # Debouncing: butuh confirm_frames deteksi berturut-turut
         if self.candidate_count < self.confirm_frames:
+            return
+
+        # Centering check: if pose info available, ensure marker is within tolerance
+        offset = None
+        if hasattr(msg, "pose_camera"):
+            pose = getattr(msg, "pose_camera")
+            if isinstance(pose, dict):
+                translation = pose.get("translation_m")
+                if isinstance(translation, (list, tuple)) and len(translation) >= 1:
+                    offset = translation[0]
+        if offset is not None and abs(offset) > self.center_tolerance:
+            # Not centered yet, keep moving forward
+            self._send_control("FOLLOW")
             return
 
         self._handle_checkpoint(int(msg.id), distance_m)

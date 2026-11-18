@@ -297,7 +297,7 @@ class LineFollowerNode(Node):
             self.lost_frames = 0
             self.error_pub.publish(Float32(data=float(normalized_error)))
 
-            angular_z = self.pid.compute(normalized_error, dt)
+            angular_z = -self.pid.compute(normalized_error, dt)
             angular_z = max(
                 -self.max_angular_speed, min(self.max_angular_speed, angular_z)
             )
