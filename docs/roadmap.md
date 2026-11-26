@@ -18,11 +18,16 @@ Robot AGV berjalan otonom di lintasan bergaris (*line-guided*):
 
 ## 🏆 Pencapaian yang Sudah Selesai (Milestone Terkini)
 
-- [x] **Refaktor Arsitektur Modular ROS 2:**
+- [x] **Refaktor Arsitektur Modular ROS 2 & Dekomposisi Kode (Clean Architecture):**
   - `agv_interfaces`: Tipe pesan custom `ArucoDetection.msg` dan `MissionState.msg`.
-  - `agv_bringup`: Driver kamera (`camera_node`) dan jembatan serial motor (`serial_bridge_node`) sudah terpisah dari algoritma navigasi.
-  - `agv_navigation`: Kontroler PID garis (`line_follower_node`) dan odometri (`odometry_node`).
-  - `agv_mission`: Detektor marker visual (`aruco_detector_node`) dan pengatur rute (`mission_controller_node`).
+  - `agv_bringup`: Driver kamera (`camera_node`) dan jembatan serial motor (`serial_bridge_node`) terpisah dari algoritma navigasi.
+  - `agv_navigation`:
+    - `line_follower_node`: Node utama pengarah garis, didekomposisi dengan modul vision `line_detector.py` dan controller belok `turn_maneuver.py`.
+    - `odometry_node`: Dead-reckoning odometri dan siaran TF, dengan visualisasi 3D RViz didelegasikan ke `robot_visualizer.py`.
+    - `goal_follower_node` & `goal_controller.py`: Navigasi titik-ke-titik (Point-to-Point) berbasis pose sasaran RViz (`/goal_pose`) dan launch file `point_navigation.launch.py`.
+  - `agv_mission`: Detektor marker visual (`aruco_detector_node`) dan pengatur rute modular (`mission_controller_node` + `route_manager.py` yang menangani debouncing, visited latch, dan centering tolerance).
+  - `firmware`: Pemisahan driver parsing frame serial (`serial_parser.cpp`) dan invers kinematika (`kinematics.h`) dari state machine `fsm.cpp`.
+  - Pembersihan workspace: Paket monolitik lama `line_tracker_ros2` dipensiunkan dengan `COLCON_IGNORE`.
 - [x] **Kalibrasi Kamera & Bench Test ArUco di Meja:**
   - Skrip kalibrasi papan catur mandiri (`calibrate_camera.py`) selesai.
   - Deteksi ID marker dan estimasi jarak meter 3D ($Z$) terverifikasi di meja tanpa menggerakkan robot.
@@ -226,15 +231,18 @@ $$b_{\text{baru}} = b_{\text{lama}} \times \frac{\theta_{\text{odom}}}{\theta_{\
 - **State Latching:** Begitu Checkpoint 1 selesai dilewati, ID 1 harus diabaikan agar robot tidak membaca ulang titik yang sama saat masih berada di dekatnya.
 
 #### 3. Implementasi yang Sudah Tersedia:
-- **`mission_controller_node`:**
+- **`mission_controller_node` & `route_manager.py`:**
   - `route_actions: ["straight", "left", "stop"]` menentukan aksi tiap checkpoint (urutan paralel dengan `route_ids`).
   - `transit_hold_sec` (default 0,8 s) memberi jeda melambat di checkpoint transit sebelum lanjut.
   - `detection_timeout_sec` (default 0,5 s) mereset debouncing bila marker target hilang.
   - `visited_ids` mengunci ID yang sudah dilewati agar tidak memicu ulang (*anti double trigger*).
-  - State misi baru: `TRANSIT`, `TURNING`, dan `ERROR`.
-- **`line_follower_node`:**
+  - `center_tolerance_m` (default 0,05 m) memeriksa posisi lateral marker sebelum memicu aksi rute.
+  - `creep_distance_m` (default 0,66 m) mengarahkan robot merayap maju ekstra di atas garis menggunakan integrasi odometri agar roda robot berhenti atau berputar tepat di sumbu persimpangan.
+  - State misi baru: `CREEPING`, `TRANSIT`, `TURNING`, dan `ERROR`.
+- **`line_follower_node` & `turn_maneuver.py`:**
   - Menerima perintah `/mission/control`: `FOLLOW`, `SLOW`, `STOP`, `LEFT`, `RIGHT`.
-  - `turn_angle_rad`, `turn_speed_radps`, `turn_timeout_sec` untuk putaran terkontrol berbasis yaw `/odom`.
+  - Ekstraksi penglihatan terisolasi di `line_detector.py` (ROI, Otsu, moments, normalized error).
+  - Controller belok modular di `turn_maneuver.py` dengan parameter `turn_angle_rad`, `turn_speed_radps`, `turn_timeout_sec` untuk putaran terkontrol berbasis yaw `/odom`.
   - `reacquire_frames`, `reacquire_error_threshold`, `reacquire_search_angle_rad` untuk mencari dan mengunci garis cabang baru.
   - Status `/line_follower/state`: `FOLLOWING`, `SLOWING`, `TURNING_LEFT/RIGHT`, `SEEKING_LINE`, `TURN_COMPLETE`, `TURN_FAILED`, `LINE_LOST`.
 
@@ -260,19 +268,19 @@ $$b_{\text{baru}} = b_{\text{lama}} \times \frac{\theta_{\text{odom}}}{\theta_{\
 
    # Terminal 2: line follower
    ros2 run agv_navigation line_follower_node --ros-args \
-     --params-file ros2_ws/src/agv_navigation/config/pid_params.yaml
+     --params-file src/agv_navigation/config/pid_params.yaml
 
    # Terminal 3: odometri
    ros2 run agv_navigation odometry_node --ros-args \
-     --params-file ros2_ws/src/agv_navigation/config/pid_params.yaml
+     --params-file src/agv_navigation/config/pid_params.yaml
 
    # Terminal 4: detektor ArUco
    ros2 run agv_mission aruco_detector_node --ros-args \
-     --params-file ros2_ws/src/agv_mission/config/route_scenario.yaml
+     --params-file src/agv_mission/config/route_scenario.yaml
 
    # Terminal 5: mission controller
    ros2 run agv_mission mission_controller_node --ros-args \
-     --params-file ros2_ws/src/agv_mission/config/route_scenario.yaml
+     --params-file src/agv_mission/config/route_scenario.yaml
    ```
 4. Pantau topik berikut selama pengujian:
    ```bash

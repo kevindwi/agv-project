@@ -32,19 +32,23 @@ aruco_detector_node:
 mission_controller_node:
   ros__parameters:
     confirm_frames: 3
-    trigger_distance_m: 0.30 # Jarak picu berhenti di checkpoint (meter)
-    slow_distance_m: 0.90 # Jarak mulai melambat dari jauh (meter)
-    detection_timeout_sec: 0.5 # Reset debouncing bila marker hilang > 0.5 s
+    trigger_distance_m: 0.70 # Jarak picu deteksi ArUco (lebih jauh agar robot punya waktu konfirmasi)
+    creep_distance_m: 0.66 # Fallback jarak merayap statis bila use_dynamic_creep=false
+    use_dynamic_creep: true # Hitung jarak merayap dinamis dari tvec.z * cos(pitch) + camera_offset_m
+    camera_offset_m: 0.45 # Jarak fisik sumbu roda ke kamera (meter)
+    camera_pitch_deg: 45.0 # Kemiringan kamera menghadap ke bawah (derajat)
+    center_tolerance_m: 0.05 # Toleransi perataan lateral marker (5 cm)
+    slow_distance_m: 2.00 # Dibuat besar agar tidak memblokir deteksi (slow_down_on_approach=false)
+    detection_timeout_sec: 1.5 # Toleran terhadap frame drop antar deteksi
     route_ids: [1, 2, 3] # Urutan checkpoint ID marker
     # Aksi per checkpoint: straight | left | right | stop
     route_actions: ["straight", "left", "stop"]
-
-    # route_ids: [1, 2] # Urutan checkpoint ID marker
-    # # Aksi per checkpoint: straight | left | right | stop
-    # route_actions: ["left", "stop"]
 
     transit_hold_sec: 0.8 # Jeda melambat di CP1 sebelum lanjut
     control_topic: "/mission/control"
     detection_topic: "/aruco/detection"
     line_status_topic: "/line_follower/state"
-    fail_on_line_lost: false # true = misi ERROR saat garis hilang total
+    odom_topic: "/odom"
+    slow_down_on_approach: false  # Disable automatic slow phase before creep
+    creep_with_slow_speed: false  # Use normal FOLLOW speed during creep
+

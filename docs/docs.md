@@ -100,11 +100,15 @@ kamera serta serial bridge. Launch ini tidak menyalakan seluruh misi. Tidak ada
 arbiter yang memadukan kontrol manual, PID garis, dan perintah misi; pilih satu
 sumber `/cmd_vel` selama pengujian.
 
-## 4. `agv_navigation`: line following dan odometri
+## 4. `agv_navigation`: line following, odometri, dan navigasi titik
 
-### 4.1 Deteksi garis: ROI, threshold, dan centroid
+Paket `agv_navigation` mengadopsi arsitektur terdekomposisi (Clean Code / Single Responsibility Principle)
+di mana algoritma komputasi dipisahkan dari node wrapper ROS 2.
 
-Line follower mengubah frame BGR menjadi grayscale, mengambil Region of
+### 4.1 Deteksi garis: ROI, threshold, dan centroid (`line_detector.py`)
+
+Logika visi diekstrak ke dalam kelas modular `LineDetector` pada `agv_navigation/line_detector.py`.
+Metode `detect()` mengubah frame BGR menjadi grayscale, mengambil Region of
 Interest (ROI) bawah gambar, melakukan Gaussian blur, lalu threshold Otsu
 terbalik. Otsu memilih ambang intensitas berdasarkan histogram frame/ROI;
 threshold terbalik membuat area gelap, seperti pita hitam, menjadi putih pada
@@ -120,7 +124,8 @@ e = (cx - lebar_ROI/2) / (lebar_ROI/2)
 Dengan definisi ini, `e > 0` berarti centroid garis berada di kanan, dan `e < 0`
 berarti berada di kiri. Centroid memakai seluruh piksel foreground dalam ROI;
 objek gelap lain atau garis bercabang yang melebar dapat menggeser pusat massa.
-`M00 > 100` menjadi syarat minimum bahwa garis dianggap ditemukan.
+`M00 > 100` menjadi syarat minimum bahwa garis dianggap ditemukan. Modul ini juga
+membuat overlay debug (bounding box ROI, centroid circle, teks status) secara terisolasi.
 
 ### 4.2 Kontrol PID kemudi
 
@@ -151,25 +156,31 @@ PID. Status yang diterbitkan antara lain `FOLLOWING`, `SLOWING`, `COASTING`, dan
 `LINE_LOST`. Pemrosesan dibatasi oleh `processing_fps`; gambar debug hanya
 dibuat/dikirim bila ada subscriber dan dibatasi oleh `debug_publish_rate_hz`.
 
-### 4.3 Manuver belok dan penguncian ulang garis
+### 4.3 Manuver belok dan penguncian ulang garis (`turn_maneuver.py`)
+
+Logika state machine belok persimpangan dan penguncian garis cabang diisolasi
+ke dalam kelas `TurnManeuverController` pada `agv_navigation/turn_maneuver.py`.
 
 Perintah `LEFT`/`TURN_LEFT` memilih `angular.z` positif; `RIGHT` memilih
-negatif. Dalam state `TURN`, node berputar di tempat sampai perubahan yaw dari
+negatif. Dalam state `TURN`, controller memutar robot di tempat sampai perubahan yaw dari
 `/odom` mencapai `turn_angle_rad`. Pengukuran selisih yaw dibungkus ke rentang
-terpendek, sehingga target belok didukung sampai 180°. Jika `/odom` belum pernah
+terpendek dengan fungsi `angle_distance(angle, reference)`:
+
+```text
+\Delta\theta = \text{atan2}(\sin(\theta - \theta_{\text{ref}}), \cos(\theta - \theta_{\text{ref}}))
+```
+
+Target belok didukung hingga $180^\circ$ ($\pi$ rad). Jika `/odom` belum pernah
 diterima, sudut diperkirakan dari `turn_speed_radps * waktu`.
 
-Setelah sudut tercapai, node masuk `SEEK_LINE`. Ia melanjutkan putaran searah
-yang sama dengan kecepatan lebih rendah sampai centroid garis berada dalam
-toleransi pusat selama `reacquire_frames` frame. Bila batas sudut pencarian
-atau timeout putar terlampaui, node menerbitkan `TURN_FAILED` dan nol ke
-`/cmd_vel`. Selesai mengunci garis menghasilkan `TURN_COMPLETE`.
+Setelah sudut tercapai, controller masuk state `SEEK_LINE`. Robot melanjutkan putaran searah
+dengan kecepatan lebih rendah ($0.45 \times \text{turn\_speed}$) sampai centroid garis berada dalam
+toleransi `reacquire_error_threshold` selama `reacquire_frames` frame stabil. Bila batas sudut
+pencarian `reacquire_search_angle_rad` atau timeout putar terlampaui, diterbitkan `TURN_FAILED` dan
+robot berhenti aman. Keberhasilan mengunci garis menghasilkan `TURN_COMPLETE`, memicu transisi
+kembali ke mode `FOLLOW`.
 
-Belok dan pencarian garis dieksekusi dalam callback gambar. Karena itu
-kelambatan/terputusnya kamera juga mengurangi frekuensi pembaruan perintah
-belok, bukan hanya kualitas visualisasi.
-
-### 4.4 Odometri differential drive
+### 4.4 Odometri differential drive dan visualisasi (`robot_visualizer.py`)
 
 Serial bridge memberi delta tick bertanda kiri dan kanan. Jarak per tick,
 perpindahan pusat robot, dan perubahan yaw dihitung dengan:
@@ -190,15 +201,25 @@ y += ds * sin(theta + dtheta/2)
 theta += dtheta
 ```
 
-Node menerbitkan `/odom`, TF `odom -> base_link`, dan `/path`. Kecepatan
-linier/sudut dihitung dari delta pose dibagi waktu antarpesan encoder; `/path`
-diterbitkan berkala dan dibatasi panjangnya oleh `max_path_poses`.
+Node `odometry_node.py` menerbitkan `/odom`, TF `odom -> base_link`, dan `/path`.
+Seluruh kode instansiasi marker 3D RViz (kotak biru sasis, panah kuning penunjuk
+arah hadap bodi, dan silinder hitam roda kiri-kanan) didelegasikan ke fungsi
+`create_robot_markers()` di `agv_navigation/robot_visualizer.py`. Hal ini memisahkan
+beban kode presentasi dari komputasi inti dead-reckoning.
 
-Integrasi ini mengasumsikan tick bertanda sesuai sisi dan arah fisik roda,
-parameter diameter/CPR/wheel separation benar, dan slip kecil. Odometri roda
-akan mengalami drift jika roda selip atau tick hilang. Pesan encoder tidak
-membawa timestamp sampel, sehingga node memberi timestamp saat callback ROS
-diterima.
+### 4.5 Navigasi Titik-ke-Titik / Point-to-Point (`goal_follower_node.py` & `goal_controller.py`)
+
+Selain pelacakan garis terpandu (line-guided), sistem mendukung navigasi otonom
+titik-ke-titik (P2P) berbasis frame koordinat `/odom` lokal via launch file
+`point_navigation.launch.py`.
+
+Node `goal_follower_node.py` menerima pose tujuan `geometry_msgs/PoseStamped`
+dari RViz via topik `/goal_pose`. Logika navigasi planar dienkapsulasi dalam
+kelas `PointToPointController` pada `agv_navigation/goal_controller.py`:
+1. Menghitung jarak Euclidean $\rho = \sqrt{\Delta x^2 + \Delta y^2}$ dan heading sasaran $\psi = \text{atan2}(\Delta y, \Delta x)$.
+2. Menghitung galat heading $\tilde{\psi} = \text{atan2}(\sin(\psi - \theta), \cos(\psi - \theta))$.
+3. State berurutan: `ROTATING_TO_HEADING` $\to$ `DRIVING_TO_POINT` (dengan kecepatan linier dikalikan $\cos(\tilde{\psi})$ agar robot melambat saat arah serong) $\to$ `ROTATING_TO_FINAL_HEADING` (menyelaraskan orientasi akhir jika `align_final_yaw: true`) $\to$ `ARRIVED`.
+4. Pembatas laju perubahan (*slew-rate limiter*) terpisah untuk akselerasi linier (`max_linear_accel`) dan akselerasi angular (`max_angular_accel`) guna mencegah roda selip pada lantai licin.
 
 ## 5. `agv_mission`: marker dan FSM rute
 
@@ -221,11 +242,13 @@ pesan “tidak ada marker”. Gambar debug bersifat opsional: salinan frame,
 bounding marker, sumbu pose, dan teks dibuat hanya saat ada subscriber serta
 dibatasi oleh `debug_publish_rate_hz`.
 
-### 5.2 Mission controller sebagai finite-state machine
+### 5.2 Mission controller sebagai finite-state machine (`route_manager.py`)
 
-`mission_controller_node.py` membaca urutan paralel `route_ids` dan
-`route_actions`. Setiap route ID harus punya satu aksi: `straight`, `left`,
-`right`, atau `stop`.
+Seluruh evaluasi rute, debouncing, dan pemilihan aksi checkpoint didelegasikan ke
+kelas `RouteManager` pada `agv_mission/route_manager.py`, sedangkan node
+`mission_controller_node.py` berfokus pada komunikasi ROS 2 dan transisi state machine global.
+Node membaca urutan paralel `route_ids` dan `route_actions`. Setiap route ID
+harus punya satu aksi: `straight`, `left`, `right`, atau `stop`.
 
 Alur implementasi:
 
@@ -235,27 +258,29 @@ Alur implementasi:
    ada deteksi selama `detection_timeout_sec`, kandidat direset.
 4. Pada jarak `<= slow_distance_m`, state menjadi `APPROACHING` dan controller
    mengirim `SLOW`.
-5. Pada jarak `<= trigger_distance_m`, ID masuk `visited_ids` agar tidak
-   memicu ulang, lalu aksi route dijalankan.
-6. `straight` masuk `TRANSIT`, menahan kecepatan lambat selama
-   `transit_hold_sec`, kemudian maju ke waypoint berikutnya.
-7. `left`/`right` masuk `TURNING` dan meminta manuver kepada line follower.
-   `TURN_COMPLETE` memajukan rute; `TURN_FAILED` mengakhiri misi dalam `ERROR`.
-8. `stop`, atau waypoint terakhir apa pun aksinya, menghasilkan `ARRIVED` dan
-   mengirim `STOP`.
+5. Evaluasi Centering: jika pose kamera tersedia, galat lateral $X$ (`offset_x`)
+   dibandingkan dengan `center_tolerance_m` (default 0,05 m / 5 cm). Jika marker
+   belum terpusat, robot tetap diperintahkan `FOLLOW` untuk maju mendekat hingga sejajar.
+6. Pada jarak `<= trigger_distance_m` dan marker terpusat, ID masuk `visited_ids`.
+   Jika `creep_distance_m > 0`, robot masuk state `CREEPING`, mengunci posisi awal $(X_0, Y_0)$
+   dari `/odom`, dan merayap maju pelan di atas garis (`SLOW`) sejauh $D_{\text{creep}}$ (mis. 0,66 m)
+   sampai poros roda robot tiba tepat di tengah persimpangan.
+7. Setelah perayapan selesai (atau langsung jika `creep_distance_m == 0`), aksi checkpoint dieksekusi:
+   - `straight` masuk `TRANSIT`, menahan kecepatan lambat selama `transit_hold_sec`, kemudian maju ke waypoint berikutnya.
+   - `left`/`right` masuk `TURNING` dan meminta manuver kepada line follower. `TURN_COMPLETE` memajukan rute; `TURN_FAILED` mengakhiri misi dalam `ERROR`.
+   - `stop`, atau waypoint terakhir apa pun aksinya, menghasilkan `ARRIVED` dan mengirim `STOP`.
 
 `MissionState` diterbitkan pada 2 Hz dan juga saat transisi. `current_waypoint`
-tetap menunjuk target aktif selama `APPROACHING`, `TRANSIT`, dan `TURNING`;
+tetap menunjuk target aktif selama `APPROACHING`, `CREEPING`, `TRANSIT`, dan `TURNING`;
 nilainya `-1` pada `IDLE`, `ERROR`, atau `ARRIVED`.
 
 ### 5.3 Debounce dan latch
 
-Debounce mengurangi pemicu palsu akibat satu deteksi sesaat. Implementasi
-menghitung pesan untuk ID yang sama dan me-reset setelah timeout. Karena detektor
-tidak menerbitkan frame kosong dan controller tidak mengetahui nomor frame,
-mekanisme ini bukan bukti matematis bahwa marker terlihat pada tiga frame
-berurutan; pesan berjarak sampai timeout masih dapat dihitung sebagai rangkaian
-yang sama. `visited_ids` merupakan latch permanen selama satu proses misi.
+Debounce mengurangi pemicu palsu akibat satu deteksi sesaat. `RouteManager`
+menghitung pesan untuk ID yang sama dan me-reset setelah timeout `detection_timeout_sec`.
+Karena detektor tidak menerbitkan frame kosong dan controller tidak mengetahui nomor frame,
+mekanisme ini menghitung frekuensi pesan dalam jendela waktu timeout.
+`visited_ids` merupakan latch permanen selama satu proses misi.
 Karena itu ID pada `route_ids` harus unik jika setiap ID hanya boleh dipakai
 sekali.
 
@@ -274,9 +299,10 @@ Reset mengembalikan `ESTOP`/`ERROR` ke `IDLE`. E-stop firmware menghentikan
 motor melalui output driver. Pemutusan daya motor secara fisik tetap perlu
 dilakukan oleh rangkaian E-stop hardware bila keselamatan mengharuskannya.
 
-### 6.2 Kinematika balik dan target encoder
+### 6.2 Kinematika balik dan target encoder (`kinematics.h`)
 
-Firmware mengubah kecepatan badan menjadi kecepatan roda differential drive:
+Perhitungan invers kinematika diisolasi dalam fungsi inline `Kinematics::computeWheelTicks` pada
+`firmware/include/kinematics.h`. Firmware mengubah kecepatan badan menjadi kecepatan roda differential drive:
 
 ```text
 vL = v - omega * b/2
@@ -284,7 +310,14 @@ vR = v + omega * b/2
 ```
 
 Lalu kecepatan roda dikalikan periode kontrol dan dibagi meter per tick untuk
-mendapat target tick per siklus. Dengan frame serial konvensi CCW, `omega > 0`
+mendapat target tick per siklus:
+
+```text
+targetLeftTicks  = vL * dt / metersPerTick
+targetRightTicks = vR * dt / metersPerTick
+```
+
+Dengan frame serial konvensi CCW, `omega > 0`
 seharusnya membuat roda kanan lebih cepat dan robot berputar kiri. Pemetaan
 objek motor pada `main.cpp` saat ini ditukar terhadap nama kanal driver karena
 hasil uji fisik sebelumnya menunjukkan arah kanal terpasang silang; perubahan
@@ -311,13 +344,16 @@ mengaktifkan START/STOP. `Motor::stop()` menonaktifkan START/STOP serta
 mengatur PWM minimum. RUN/BRAKE ditetapkan saat `begin()` dan tidak diubah lagi
 oleh kode runtime.
 
-### 6.5 Parser serial dan watchdog
+### 6.5 Parser serial dan watchdog (`serial_parser.cpp`)
 
-Parser firmware membaca ASCII sampai newline dengan buffer 48 byte. Frame
-terlalu panjang dibuang sampai newline. Perintah hanya diterima bila format
-`C,linear,angular` valid, kedua angka berhasil diparse dan finite. Firmware
-mengirim `E,left_ticks,right_ticks` setiap siklus kontrol saat `MOVING`.
+Logika penerimaan stream serial diisolasi ke dalam kelas `SerialParser` pada
+`firmware/include/serial_parser.h` dan `firmware/src/drivers/serial_parser.cpp`.
+Parser membaca byte demi byte tanpa blocking, mengumpulkan karakter hingga newline
+dengan buffer 48 byte, dan mengabaikan baris yang melebihi kapasitas (*discard line*).
+Perintah hanya diterima bila format `C,linear,angular` valid, kedua angka berhasil
+diparse menggunakan `strtod` dan bernilai finite.
 
+Setiap siklus kontrol saat state `MOVING`, firmware mengirim balik `E,left_ticks,right_ticks`.
 Jika tidak ada perintah valid selama 500 ms saat `MOVING`, watchdog firmware
 menghentikan motor, mereset PID, dan membuang pulsa yang tertahan. Ini adalah
 failsafe utama saat serial/ROS berhenti. Tidak ada checksum pada frame.
@@ -372,7 +408,7 @@ aksi misi, kontrol motor, atau skala odometri.
 | Polaritas tombol E-stop | Kode mengatur E-stop sebagai `INPUT_PULLUP` tetapi `activeLow=false` (event dianggap aktif saat pin HIGH). | Ini hanya benar bila rangkaian eksternal memang membuat level normal/aktif sesuai konfigurasi tersebut. Cocokkan dengan wiring dan uji fisik; E-stop keselamatan tetap harus memutus daya melalui rangkaian hardware. |
 | Covariance odometri | `Odometry` dibuat tanpa mengisi covariance, sehingga field tetap nol. | Konsumen yang memakai covariance dapat menafsirkan data seolah tidak memiliki ketidakpastian. Isi kovarians empiris atau dokumentasikan bahwa odometri open-loop ini belum mengestimasi ketidakpastian. |
 | Path dan memori | Pose path dipotong pada 10.000 sampel dan seluruh path dikirim setiap 0,5 s. | Memadai untuk demo singkat, tetapi pesan makin besar hingga batas; kurangi jumlah pose atau publish incremental untuk operasi lama. |
-| Dokumentasi/perintah paket lama | `serial_protocol.md` masih menjelaskan `line_tracker_ros2/serial_bridge.py`; checklist menyebut camera `/dev/video2`; prosedur hardware merujuk launch paket lama. | Arsitektur aktif adalah `agv_bringup`, `agv_navigation`, `agv_mission`, tetapi paket lama tetap ada. Tandai contoh lama dengan jelas atau migrasikan agar teknisi tidak menjalankan dua stack. |
+| Dokumentasi/perintah paket lama | Paket monolitik lama `line_tracker_ros2` telah ditandai `COLCON_IGNORE` dan dipensiunkan penuh. | Seluruh alur aktif kini terstandarisasi penuh di paket modular `agv_bringup`, `agv_navigation`, dan `agv_mission`. Hindari menjalankan script atau launch dari `line_tracker_ros2`. |
 | Nilai tuning berbeda | Config line follower aktif: 0,18 m/s, `Kp=0,4`, `Kd=0,06`; checklist/roadmap memuat 0,20 m/s atau nilai awal lain. Mission aktif memakai 0,30/0,90 m, sedangkan roadmap historis menyebut ambang lain. | Dokumen prosedur lama adalah titik awal, bukan nilai aktif. Saat tuning, gunakan YAML node aktif sebagai sumber parameter runtime. |
 | Default misi/odometri vs parameter aktif | Default mission controller adalah threshold 0,35/0,70 m; YAML aktif mengatur 0,30/0,90 m. Default odometri 0,48 m/900 CPR juga berbeda dari YAML aktif 0,454 m/610 CPR. | Menjalankan node tanpa `--params-file` mengubah perilaku dan skala. Selalu muat konfigurasi yang sesuai; untuk penggunaan rutin, satukan parameter dalam launch file. |
 | Debug FPS default vs YAML | Line follower dan ArUco default ke 5 Hz; YAML aktif menetapkan 10 Hz. | Jika node dijalankan tanpa file parameter, debug terasa lebih lambat. Perintah launch/run harus memuat YAML yang benar. |
@@ -381,7 +417,22 @@ aksi misi, kontrol motor, atau skala odometri.
 
 ## 9. Rujukan kode dan dokumen
 
-- [Firmware README](../firmware/README.md), [konfigurasi firmware](../firmware/include/config.h), [FSM firmware](../firmware/src/app/fsm.cpp), [driver motor](../firmware/src/drivers/motor.cpp).
-- [`agv_interfaces`](../ros2_ws/src/agv_interfaces/), [`agv_bringup`](../ros2_ws/src/agv_bringup/), [`agv_navigation`](../ros2_ws/src/agv_navigation/), [`agv_mission`](../ros2_ws/src/agv_mission/).
-- [Parameter hardware](hardware.md), [protokol serial](serial_protocol.md), [roadmap](roadmap.md), dan [checklist](checklist.md).
+- **Firmware:**
+  - [Firmware README](../firmware/README.md), [konfigurasi pin & konstanta](../firmware/include/config.h)
+  - [State Machine FSM](../firmware/src/app/fsm.cpp), [Driver Parser Serial](../firmware/src/drivers/serial_parser.cpp)
+  - [Invers Kinematika Roda](../firmware/include/kinematics.h), [Driver Motor & Encoder](../firmware/src/drivers/motor.cpp)
+- **ROS 2 Navigasi (`agv_navigation`):**
+  - [Node Line Follower](../ros2_ws/src/agv_navigation/agv_navigation/line_follower_node.py)
+  - [Deteksi Garis OpenCV](../ros2_ws/src/agv_navigation/agv_navigation/line_detector.py), [Manuver Belok & Reacquire](../ros2_ws/src/agv_navigation/agv_navigation/turn_maneuver.py)
+  - [Node Odometri](../ros2_ws/src/agv_navigation/agv_navigation/odometry_node.py), [Visualisasi Marker 3D RViz](../ros2_ws/src/agv_navigation/agv_navigation/robot_visualizer.py)
+  - [Node Navigasi P2P Goal Follower](../ros2_ws/src/agv_navigation/agv_navigation/goal_follower_node.py), [Kontroler Titik Planar](../ros2_ws/src/agv_navigation/agv_navigation/goal_controller.py)
+- **ROS 2 Misi (`agv_mission`):**
+  - [Node Mission Controller](../ros2_ws/src/agv_mission/agv_mission/mission_controller_node.py)
+  - [Pengelola Rute & Debounce](../ros2_ws/src/agv_mission/agv_mission/route_manager.py)
+  - [Node Detektor ArUco](../ros2_ws/src/agv_mission/agv_mission/aruco_detector_node.py)
+- **ROS 2 Bringup & Interfaces:**
+  - [Node Kamera V4L2](../ros2_ws/src/agv_bringup/agv_bringup/camera_node.py), [Node Jembatan Serial](../ros2_ws/src/agv_bringup/agv_bringup/serial_bridge_node.py)
+  - [Pesan Antarmuka `agv_interfaces`](../ros2_ws/src/agv_interfaces/)
+- **Dokumentasi Prosedur:**
+  - [Parameter hardware](hardware.md), [protokol serial](serial_protocol.md), [roadmap pengembangan](roadmap.md), dan [checklist operasional](checklist.md).
 

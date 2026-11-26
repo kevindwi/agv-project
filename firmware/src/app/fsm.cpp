@@ -1,10 +1,7 @@
 #include "fsm.h"
 #include "Arduino.h"
 #include "config.h"
-
-#include <math.h>
-#include <stdlib.h>
-#include <string.h>
+#include "kinematics.h"
 
 FSM::FSM(Motor &right, Motor &left)
     : _right(right), _left(left),
@@ -60,6 +57,7 @@ void FSM::changeState(AgvState newState) {
     _targetRightTicks = 0.0f;
     _leftPid.reset();
     _rightPid.reset();
+    _serialParser.reset();
     stopMotors();
   } else {
     // Tunggu perintah baru setelah tombol START ditekan.
@@ -69,76 +67,24 @@ void FSM::changeState(AgvState newState) {
 
   SERIAL_DEBUG.print("STATE CHANGE --> ");
   SERIAL_DEBUG.println(stateName());
-
 }
 
 void FSM::handleSerial() {
-  static char buffer[48];
-  static byte index = 0;
-  static bool discardLine = false;
-
   while (SERIAL_COMM.available() > 0) {
     char c = SERIAL_COMM.read();
+    float linear = 0.0f;
+    float angular = 0.0f;
 
-    if (c == '\n') {
-      if (!discardLine) {
-        buffer[index] = '\0';
-        parseCommand(buffer);
-      }
-      index = 0;
-      discardLine = false;
-    } else if (c != '\r') {
-      if (index < sizeof(buffer) - 1) {
-        buffer[index++] = c;
-      } else {
-        // Abaikan seluruh frame yang terlalu panjang sampai newline.
-        discardLine = true;
-      }
+    if (_serialParser.feed(c, linear, angular)) {
+      Kinematics::computeWheelTicks(linear, angular, _targetLeftTicks, _targetRightTicks);
+      _lastCommandTime = millis();
     }
   }
-}
-
-void FSM::parseCommand(char *line) {
-  if (line[0] != 'C' || line[1] != ',') {
-    return;
-  }
-
-  char *linearText = line + 2;
-  char *comma = strchr(linearText, ',');
-  if (comma == nullptr) {
-    return;
-  }
-
-  *comma = '\0';
-  char *endLinear;
-  char *endAngular;
-
-  // AVR libc menyediakan strtod; strtof tidak tersedia pada toolchain ini.
-  float linear = (float)strtod(linearText, &endLinear);
-  float angular = (float)strtod(comma + 1, &endAngular);
-
-  if (endLinear == linearText || endAngular == comma + 1 ||
-      *endLinear != '\0' || *endAngular != '\0' ||
-      !isfinite(linear) || !isfinite(angular)) {
-    return;
-  }
-
-  const float leftMps = linear - angular * WHEEL_SEPARATION_M / 2.0f;
-  const float rightMps = linear + angular * WHEEL_SEPARATION_M / 2.0f;
-
-  const float dt = CONTROL_PERIOD_MS / 1000.0f;
-  const float metersPerTick =
-      (PI * WHEEL_DIAMETER_M) / PULSES_PER_WHEEL_REV;
-
-  _targetLeftTicks = leftMps * dt / metersPerTick;
-  _targetRightTicks = rightMps * dt / metersPerTick;
-  _lastCommandTime = millis();
 }
 
 void FSM::update() {
   if (_state != AgvState::MOVING) {
     stopMotors();
-
     // Buang pulsa saat diam agar tidak masuk ke siklus berikutnya.
     _left.getAndResetPulses();
     _right.getAndResetPulses();

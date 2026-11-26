@@ -2,6 +2,7 @@
 
 #include "motor.h"
 #include "pid.h"
+#include "serial_parser.h"
 
 enum class AgvState { IDLE, MOVING, ERROR, ESTOP };
 
@@ -21,12 +22,12 @@ public:
 private:
   void stopMotors();
   bool commandTimedOut() const;
-  void parseCommand(char *line);
 
   Motor &_right;
   Motor &_left;
   PIDController _leftPid;
   PIDController _rightPid;
+  SerialParser _serialParser;
 
   AgvState _state;
   unsigned long _stateStartTime;

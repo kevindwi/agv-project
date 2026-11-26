@@ -6,24 +6,37 @@
 
 ---
 
-## 🏗️ Fondasi Arsitektur Modular ROS 2 Jazzy
+## 🏗️ Fondasi Arsitektur Modular ROS 2 Jazzy & Firmware
 
 - [x] **Paket `agv_interfaces` (Bahasa Pesan Terstruktur):**
   - [x] Definisi pesan `ArucoDetection.msg` (`int32 id`, `float32 distance_m`).
   - [x] Definisi pesan `MissionState.msg` (`string state`, `int32 current_waypoint`).
 - [x] **Paket `agv_bringup` (Driver Hardware & Komunikasi):**
-  - [x] `camera_node`: Pembaca kamera USB Logitech (/dev/video2) $\to$ publish `/camera/image_raw`.
+  - [x] `camera_node`: Pembaca kamera USB V4L2 $\to$ publish `/camera/image_raw`.
   - [x] `serial_bridge_node`: Driver komunikasi serial non-blocking (`timeout=0` + byte stream buffer).
   - [x] Failsafe heartbeat IDLE: Kirim `C,0,0` hanya saat robot diam agar firmware tidak timeout.
   - [x] `agv_core.launch.py`: Launch file gabungan kamera + bridge serial.
-- [x] **Paket `agv_navigation` (Navigasi Garis & Odometri):**
-  - [x] `line_follower_node`: Pemroses citra garis, ROI, OTSU, PID kemudi garis $\to$ `/cmd_vel`.
+- [x] **Paket `agv_navigation` (Navigasi Garis, Odometri, & P2P):**
+  - [x] `line_follower_node`: Node utama pelacak garis $\to$ `/cmd_vel`.
+  - [x] `line_detector.py`: Modul ekstraksi citra OpenCV modular (ROI dinamis, OTSU, inversi biner, dan kalkulasi centroid/error).
+  - [x] `turn_maneuver.py`: Modul controller manuver belok rotasi terkontrol berbasis yaw `/odom` dan penguncian garis cabang (`SEEK_LINE`).
   - [x] Ramping akselerasi & deselerasi (*Velocity Slew Rate Limiter*).
   - [x] Filter glitch kehilangan garis (*Coasting* 8 frame toleransi).
   - [x] `odometry_node`: Integrator pulsa encoder $\to$ `/odom`, TF `odom -> base_link`, dan `/path`.
+  - [x] `robot_visualizer.py`: Modul helper visualisasi 3D robot RViz (sasis, panah heading, silinder roda) terpisah dari dead-reckoning.
+  - [x] `goal_follower_node`: Node navigasi titik-ke-titik (P2P) berbasis pose sasaran RViz (`/goal_pose`).
+  - [x] `goal_controller.py`: Modul kalkulasi kinematika P2P, cos-facing scale, dan pembatas akselerasi.
+  - [x] `point_navigation.launch.py`: Launch file navigasi titik-ke-titik lokal.
 - [x] **Paket `agv_mission` (Persepsi Visual & Logika Rute):**
   - [x] `aruco_detector_node`: Deteksi marker ArUco dictionary `DICT_4X4_50`, estimasi pose 3D jarak $Z$.
-  - [x] `mission_controller_node`: Finite State Machine rute (`NAVIGATING` $\to$ `APPROACHING` $\to$ `ARRIVED`).
+  - [x] `mission_controller_node`: Finite State Machine rute (`NAVIGATING` $\to$ `APPROACHING` $\to$ `TRANSIT` $\to$ `TURNING` $\to$ `ARRIVED`).
+  - [x] `route_manager.py`: Modul manajemen waypoint, debounce kandidat marker, latching ID yang sudah dilewati, dan toleransi centering kamera.
+- [x] **Firmware Arduino Mega (`firmware/`):**
+  - [x] `fsm.cpp`: FSM status robot (`IDLE`, `MOVING`, `ERROR`, `ESTOP`) dengan loop PID PWM dan telemetri encoder periodik.
+  - [x] `serial_parser.cpp`: Driver parsing frame ASCII serial `C,v,w` non-blocking dengan buffer mandiri.
+  - [x] `kinematics.h`: Modul kalkulasi invers kinematika differential drive ($v, \omega \to \text{target tick}$).
+- [x] **Pembersihan Modul Legacy:**
+  - [x] Paket lama `line_tracker_ros2` diisolasi dengan `COLCON_IGNORE` demi menjaga kecepatan build dan mencegah konflik workspace.
 
 ---
 
@@ -75,16 +88,18 @@
 
 ## 🔴 FASE 4: Skenario Multi-Checkpoint & Percabangan
 
-- [ ] **Mekanisme Latch & Debouncing:**
-  - [ ] Marker harus terdeteksi minimal 3 frame berturut-turut (`confirm_frames: 3`) sebelum aksi dipicu.
-  - [ ] Mekanisme *Latch ID*: Setelah Checkpoint 1 dilewati, ID 1 diabaikan agar tidak terjadi *double trigger*.
-- [ ] **Manuver Percabangan Garis (Checkpoint 2 - Belok):**
-  - [ ] Penentuan arah cabang rute (kiri / kanan).
-  - [ ] Logika manuver belok di persimpangan: putaran sudut terkontrol $\omega$ sampai kamera mengunci garis cabang baru.
-  - [ ] Kembali otomatis ke mode pelacak garis (`FOLLOW`).
-- [ ] **Uji Skenario Lengkap 3 Titik (CP1 $\to$ CP2 $\to$ CP3):**
-  - [ ] Checkpoint 1 (ID 1): Titik transit (melambat sejenak, konfirmasi, lanjut melaju).
-  - [ ] Checkpoint 2 (ID 2): Titik persimpangan (belok ke cabang tujuan).
+- [x] **Mekanisme Latch, Debouncing, Centering, & Odometry Creep:**
+  - [x] Debounce filter terintegrasi di `route_manager.py`: marker harus terdeteksi minimal 3 frame berturut-turut (`confirm_frames: 3`).
+  - [x] Mekanisme *Latch ID*: Setelah Checkpoint dilewati, marker ID dimasukkan ke `visited_ids` agar tidak memicu ulang (*anti-double trigger*).
+  - [x] Pemeriksaan toleransi centering (`center_tolerance_m`): robot tetap melaju jika marker belum berada di area tengah kamera.
+  - [x] Mekanisme *Odometry Creep* (`creep_distance_m: 0.66`): robot merayap maju pelan sejauh 66 cm (mengompensasi jarak kamera-poros roda 45 cm + sudut kemiringan 45°) agar roda robot berhenti/belok tepat di titik tengah persimpangan.
+- [x] **Manuver Percabangan Garis (Checkpoint 2 - Belok):**
+  - [x] Penentuan arah cabang rute (`straight`, `left`, `right`, `stop`) didukung via parameter `route_actions`.
+  - [x] Logika manuver belok di persimpangan via `turn_maneuver.py`: putaran sudut terkontrol $\omega$ berbasis selisih yaw `/odom` sampai kamera mengunci garis cabang baru (`SEEK_LINE`).
+  - [x] Transisi otomatis kembali ke mode pelacak garis (`FOLLOW`) saat garis baru terkunci stabil.
+- [ ] **Uji Skenario Lengkap 3 Titik di Lintasan Fisik (CP1 $\to$ CP2 $\to$ CP3):**
+  - [ ] Checkpoint 1 (ID 1): Titik transit (melambat sejenak via `transit_hold_sec`, konfirmasi, lanjut melaju).
+  - [ ] Checkpoint 2 (ID 2): Titik persimpangan (belok ke cabang tujuan dan reacquire garis).
   - [ ] Checkpoint 3 (ID 3): Stasiun akhir (berhenti total dan misi selesai).
 
 ---

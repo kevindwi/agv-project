@@ -4,7 +4,6 @@ import math
 import time
 
 import cv2
-import numpy as np
 import rclpy
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Twist
@@ -21,7 +20,9 @@ from rclpy.qos import (
 from sensor_msgs.msg import Image
 from std_msgs.msg import Float32, String
 
+from .line_detector import LineDetector
 from .pid import PIDController
+from .turn_maneuver import TurnManeuverController
 
 IMAGE_QOS = QoSProfile(
     history=HistoryPolicy.KEEP_LAST,
@@ -51,77 +52,74 @@ class LineFollowerNode(Node):
         self.declare_parameter("debug_publish_rate_hz", 5.0)
 
         # Parameter manuver belok (Fase 4)
-        self.declare_parameter("turn_angle_rad", 1.57)
-        self.declare_parameter("turn_speed_radps", 0.40)
+        self.declare_parameter("turn_angle_rad", 1.35)
+        self.declare_parameter("turn_speed_radps", 0.35)
+        self.declare_parameter("min_turn_speed_radps", 0.12)
+        self.declare_parameter("yaw_kp", 1.2)
+        self.declare_parameter("seek_kp", 1.2)
         self.declare_parameter("turn_timeout_sec", 12.0)
-        self.declare_parameter("reacquire_frames", 4)
-        self.declare_parameter("reacquire_error_threshold", 0.25)
-        self.declare_parameter("reacquire_search_angle_rad", 0.55)
+        self.declare_parameter("reacquire_frames", 3)
+        self.declare_parameter("reacquire_error_threshold", 0.15)
+        self.declare_parameter("reacquire_search_angle_rad", 0.60)
         self.declare_parameter("status_topic", "/line_follower/state")
 
-        self.kp = float(self.get_parameter("kp").value)
-        self.ki = float(self.get_parameter("ki").value)
-        self.kd = float(self.get_parameter("kd").value)
         self.linear_speed = float(self.get_parameter("linear_speed").value)
         self.slow_speed = float(self.get_parameter("slow_speed").value)
         self.max_angular_speed = float(self.get_parameter("max_angular_speed").value)
         self.max_acceleration = float(self.get_parameter("max_acceleration").value)
-
-        self.roi_top = float(self.get_parameter("roi_top_ratio").value)
-        self.roi_bottom = float(self.get_parameter("roi_bottom_ratio").value)
-        self.roi_left = float(self.get_parameter("roi_left_ratio").value)
-        self.roi_right = float(self.get_parameter("roi_right_ratio").value)
         self.processing_fps = max(
             1.0, float(self.get_parameter("processing_fps").value)
         )
         self.debug_publish_rate = max(
             0.0, float(self.get_parameter("debug_publish_rate_hz").value)
         )
-
-        self.turn_angle = abs(float(self.get_parameter("turn_angle_rad").value))
-        self.turn_speed = max(
-            0.05, abs(float(self.get_parameter("turn_speed_radps").value))
-        )
-        if self.turn_angle > math.pi:
-            self.get_logger().warning(
-                "turn_angle_rad > 180 derajat tidak didukung oleh pengukuran yaw absolut; "
-                "gunakan sudut <= 3.14 rad."
-            )
-        self.turn_timeout = max(
-            1.0, float(self.get_parameter("turn_timeout_sec").value)
-        )
-        self.reacquire_frames = max(
-            1, int(self.get_parameter("reacquire_frames").value)
-        )
-        self.reacquire_error_threshold = float(
-            self.get_parameter("reacquire_error_threshold").value
-        )
-        self.reacquire_search_angle = abs(
-            float(self.get_parameter("reacquire_search_angle_rad").value)
-        )
         status_topic = str(self.get_parameter("status_topic").value)
 
-        self.pid = PIDController(self.kp, self.ki, self.kd)
+        # Sub-komponen modular
+        self.pid = PIDController(
+            float(self.get_parameter("kp").value),
+            float(self.get_parameter("ki").value),
+            float(self.get_parameter("kd").value),
+        )
+        self.detector = LineDetector(
+            float(self.get_parameter("roi_top_ratio").value),
+            float(self.get_parameter("roi_bottom_ratio").value),
+            float(self.get_parameter("roi_left_ratio").value),
+            float(self.get_parameter("roi_right_ratio").value),
+        )
+        self.turn_ctrl = TurnManeuverController(
+            turn_angle_rad=float(self.get_parameter("turn_angle_rad").value),
+            turn_speed_radps=float(self.get_parameter("turn_speed_radps").value),
+            min_turn_speed_radps=float(
+                self.get_parameter("min_turn_speed_radps").value
+            ),
+            yaw_kp=float(self.get_parameter("yaw_kp").value),
+            seek_kp=float(self.get_parameter("seek_kp").value),
+            turn_timeout_sec=float(self.get_parameter("turn_timeout_sec").value),
+            reacquire_frames=int(self.get_parameter("reacquire_frames").value),
+            reacquire_error_threshold=float(
+                self.get_parameter("reacquire_error_threshold").value
+            ),
+            reacquire_search_angle_rad=float(
+                self.get_parameter("reacquire_search_angle_rad").value
+            ),
+        )
+
         self.bridge = CvBridge()
         self.last_time = time.monotonic()
         self.last_process_time = 0.0
         cv2.setNumThreads(1)
-        # FOLLOW, SLOW, STOP, TURN, SEEK_LINE
-        self.mission_state = "FOLLOW"
-        self.current_linear_speed = 0.0  # Kecepatan aktual bertahap (ramping)
+
+        # State navigasi
+        self.mission_state = "FOLLOW"  # FOLLOW, SLOW, STOP, TURN, SEEK_LINE
+        self.current_linear_speed = 0.0
         self.lost_frames = 0
-        self.max_lost_frames = 8  # Toleransi flicker ~0.25 detik sebelum berhenti
+        self.max_lost_frames = 8
         self.last_twist = Twist()
 
-        # State manuver belok
+        # State odometri & status
         self.current_yaw = 0.0
         self.odom_received = False
-        self.turn_direction = 0
-        self.turn_start_yaw = None
-        self.turn_started_at = None
-        self.seek_start_yaw = None
-        self.seek_started_at = None
-        self.reacquire_count = 0
         self.last_status = ""
         self.last_status_time = 0.0
         self.last_debug_publish_time = 0.0
@@ -140,7 +138,7 @@ class LineFollowerNode(Node):
         self.add_on_set_parameters_callback(self.on_set_parameters)
 
         self.get_logger().info(
-            "LineFollowerNode aktif (vision + PID + manuver belok odometri)."
+            "LineFollowerNode aktif (vision + PID + manuver belok odometri modular)."
         )
 
     def on_set_parameters(self, params):
@@ -164,31 +162,26 @@ class LineFollowerNode(Node):
     def mission_callback(self, msg: String):
         command = msg.data.strip().upper()
         if command in ("FOLLOW", "SLOW", "STOP"):
+            prev_state = self.mission_state
             self.mission_state = command
-            if command in ("FOLLOW", "SLOW"):
+            if command in ("FOLLOW", "SLOW") and prev_state not in ("FOLLOW", "SLOW"):
                 self.pid.reset()
             if command == "STOP":
                 self.current_linear_speed = 0.0
-                self.turn_start_yaw = None
-                self.seek_start_yaw = None
+                self.turn_ctrl.reset()
             return
 
         if command in ("LEFT", "RIGHT", "TURN_LEFT", "TURN_RIGHT"):
-            self.turn_direction = 1 if command in ("LEFT", "TURN_LEFT") else -1
-            self.turn_start_yaw = self.current_yaw
-            self.turn_started_at = time.monotonic()
-            self.seek_start_yaw = None
-            self.seek_started_at = None
-            self.reacquire_count = 0
+            direction = 1 if command in ("LEFT", "TURN_LEFT") else -1
+            self.turn_ctrl.start_turn(direction, self.current_yaw)
             self.current_linear_speed = 0.0
             self.pid.reset()
             self.mission_state = "TURN"
             self.get_logger().info(
-                f"Manuver belok {'kiri' if self.turn_direction > 0 else 'kanan'} dimulai."
+                f"Manuver belok {'kiri' if direction > 0 else 'kanan'} dimulai."
             )
             self._publish_status(
-                "TURNING_LEFT" if self.turn_direction > 0 else "TURNING_RIGHT",
-                force=True,
+                "TURNING_LEFT" if direction > 0 else "TURNING_RIGHT", force=True
             )
             return
 
@@ -210,26 +203,8 @@ class LineFollowerNode(Node):
         dt = max(0.001, min(0.1, now - self.last_time))
         self.last_time = now
 
-        # Hitung target kecepatan berdasarkan status misi
-        if self.mission_state in ("STOP", "TURN", "SEEK_LINE"):
-            target_speed = 0.0
-        elif self.mission_state == "SLOW":
-            target_speed = self.slow_speed
-        else:
-            target_speed = self.linear_speed
-
-        # Ramp kecepatan linier (Slew rate limiter untuk akselerasi & deselerasi halus)
-        max_delta_v = self.max_acceleration * dt
-        if self.current_linear_speed < target_speed:
-            self.current_linear_speed = min(
-                target_speed, self.current_linear_speed + max_delta_v
-            )
-        elif self.current_linear_speed > target_speed:
-            self.current_linear_speed = max(
-                target_speed, self.current_linear_speed - max_delta_v
-            )
-
-        # Jika misi STOP dan kecepatan sudah melandai ke nol, berhenti total
+        # Update kecepatan linier dengan slew rate limiter
+        self._update_linear_speed(dt)
         if self.mission_state == "STOP" and self.current_linear_speed <= 0.005:
             self.current_linear_speed = 0.0
             self.cmd_vel_pub.publish(Twist())
@@ -243,61 +218,88 @@ class LineFollowerNode(Node):
             self.get_logger().warn(f"Gagal decode frame: {e}")
             return
 
-        h, w, _ = frame.shape
-        r_top = int(h * self.roi_top)
-        r_bottom = int(h * self.roi_bottom)
-        r_left = int(w * self.roi_left)
-        r_right = int(w * self.roi_right)
-
-        roi = frame[r_top:r_bottom, r_left:r_right]
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        # Deteksi garis gelap/hitam di atas permukaan terang
-        _, binary = cv2.threshold(
-            blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
-        )
-
-        moments = cv2.moments(binary)
-        line_found = moments["m00"] > 100
-        normalized_error = 0.0
-        cx_global = None
-        cy_global = int((r_top + r_bottom) / 2)
-        roi_width = r_right - r_left
-
-        if line_found:
-            cx_local = int(moments["m10"] / moments["m00"])
-            cx_global = r_left + cx_local
-            # Error ternormalisasi: -1.0 (kiri) s/d +1.0 (kanan)
-            normalized_error = (cx_local - (roi_width / 2.0)) / (roi_width / 2.0)
-
-        debug_due = (
+        create_debug = (
             self.debug_pub.get_subscription_count() > 0
             and self.debug_publish_rate > 0.0
             and now - self.last_debug_publish_time >= 1.0 / self.debug_publish_rate
         )
-        debug_img = frame.copy() if debug_due else None
-        if debug_img is not None:
-            cv2.rectangle(
-                debug_img, (r_left, r_top), (r_right, r_bottom), (0, 255, 0), 2
-            )
 
-        # Mode manuver belok: kendalikan rotasi di tempat lebih dulu
+        # 1. Deteksi garis via modul LineDetector (perlebar ROI hanya saat SEEK_LINE)
+        res = self.detector.detect(
+            frame,
+            create_debug=create_debug,
+            status_text="LINE LOST"
+            if self.lost_frames > self.max_lost_frames
+            else f"COASTING ({self.lost_frames}/{self.max_lost_frames})"
+            if self.lost_frames > 0
+            else "",
+            linear_speed=self.current_linear_speed,
+            wide_roi=(self.mission_state == "SEEK_LINE"),
+        )
+
+        # 2. Mode belok di tempat
         if self.mission_state == "TURN":
-            self._run_turn()
-            self._publish_debug(debug_img)
+            event, angular_z = self.turn_ctrl.update_turn(
+                self.current_yaw, self.odom_received, line_found=res.line_found
+            )
+            if event == "TIMEOUT":
+                self._fail_turn("Waktu putar habis sebelum sudut target tercapai")
+            elif event == "REACHED_TARGET":
+                self.mission_state = "SEEK_LINE"
+                self.cmd_vel_pub.publish(Twist())
+                self._publish_status("SEEKING_LINE", force=True)
+            else:
+                twist = Twist()
+                twist.angular.z = angular_z
+                self.cmd_vel_pub.publish(twist)
+                self._publish_status(
+                    "TURNING_LEFT"
+                    if self.turn_ctrl.turn_direction > 0
+                    else "TURNING_RIGHT"
+                )
+            if create_debug:
+                debug_image = (
+                    res.debug_image if res.debug_image is not None else frame
+                )
+                self._publish_debug(debug_image)
             return
 
-        # Mode mencari garis cabang setelah sudut target tercapai
+        # 3. Mode pencarian garis setelah belok (LCTT)
         if self.mission_state == "SEEK_LINE":
-            self._seek_line(line_found, normalized_error)
-            self._publish_debug(debug_img)
+            event, angular_z = self.turn_ctrl.update_seek(
+                self.current_yaw,
+                self.odom_received,
+                res.line_found,
+                res.normalized_error,
+                max_angular_speed=self.max_angular_speed,
+            )
+            if event == "FAILED":
+                self._fail_turn("Garis cabang tidak ditemukan setelah belok")
+            elif event == "COMPLETE":
+                self.mission_state = "FOLLOW"
+                self.current_linear_speed = 0.0
+                self.pid.reset()
+                self.cmd_vel_pub.publish(Twist())
+                self._publish_status("TURN_COMPLETE", force=True)
+            else:
+                twist = Twist()
+                twist.angular.z = angular_z
+                self.cmd_vel_pub.publish(twist)
+                self._publish_status("SEEKING_LINE")
+            if create_debug:
+                # NumPy arrays tidak dapat dipakai sebagai boolean; pilih eksplisit.
+                debug_image = (
+                    res.debug_image if res.debug_image is not None else frame
+                )
+                self._publish_debug(debug_image)
             return
 
-        if line_found:
+        # 4. Mode Line Following normal
+        if res.line_found:
             self.lost_frames = 0
-            self.error_pub.publish(Float32(data=float(normalized_error)))
+            self.error_pub.publish(Float32(data=float(res.normalized_error)))
 
-            angular_z = self.pid.compute(normalized_error, dt)
+            angular_z = -self.pid.compute(res.normalized_error, dt)
             angular_z = max(
                 -self.max_angular_speed, min(self.max_angular_speed, angular_z)
             )
@@ -307,169 +309,71 @@ class LineFollowerNode(Node):
             twist.angular.z = angular_z
             self.last_twist = twist
             self.cmd_vel_pub.publish(twist)
-
-            # Gambar titik centroid pada debug image
-            if debug_img is not None and cx_global is not None:
-                cv2.circle(debug_img, (cx_global, cy_global), 6, (0, 0, 255), -1)
-            if debug_img is not None:
-                cv2.putText(
-                    debug_img,
-                    f"Err: {normalized_error:.2f} | Speed: {self.current_linear_speed:.2f}",
-                    (r_left, r_top - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (0, 255, 0),
-                    2,
-                )
             self._publish_status(
                 "SLOWING" if self.mission_state == "SLOW" else "FOLLOWING"
             )
         else:
             self.lost_frames += 1
             if self.lost_frames <= self.max_lost_frames:
-                # Glitch filter: jika baru hilang 1-8 frame, pertahankan kecepatan ramping saat ini
+                # Glitch filter: pertahankan kecepatan selama coasting
                 twist = Twist()
                 twist.linear.x = self.current_linear_speed
                 twist.angular.z = self.last_twist.angular.z
                 self.cmd_vel_pub.publish(twist)
-                if debug_img is not None:
-                    cv2.putText(
-                        debug_img,
-                        f"COASTING ({self.lost_frames}/{self.max_lost_frames})",
-                        (r_left, r_top - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5,
-                        (0, 255, 255),
-                        2,
-                    )
                 self._publish_status("COASTING")
             else:
-                # Benar-benar keluar dari garis > 0.25 detik -> rem aman
+                # Garis benar-benar hilang -> rem aman
                 self.current_linear_speed = 0.0
                 self.last_twist = Twist()
                 self.cmd_vel_pub.publish(Twist())
                 self.pid.reset()
-                if debug_img is not None:
-                    cv2.putText(
-                        debug_img,
-                        "LINE LOST",
-                        (r_left, r_top - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5,
-                        (0, 0, 255),
-                        2,
-                    )
                 self._publish_status("LINE_LOST")
 
-        self._publish_debug(debug_img)
+        if create_debug and res.debug_image is not None:
+            self._publish_debug(res.debug_image)
 
-    def _run_turn(self):
-        """Putar robot di tempat hingga sudut target tercapai."""
-        now = time.monotonic()
-        if self.turn_started_at is None:
-            self.turn_started_at = now
-        if self.turn_start_yaw is None:
-            self.turn_start_yaw = self.current_yaw
-
-        if now - self.turn_started_at > self.turn_timeout:
-            self._fail_turn("Waktu putar habis sebelum sudut target tercapai")
-            return
-
-        if self.odom_received:
-            turned = abs(self._angle_distance(self.current_yaw, self.turn_start_yaw))
+    def _update_linear_speed(self, dt: float):
+        """Slew rate limiter untuk akselerasi & deselerasi linier halus."""
+        if self.mission_state in ("STOP", "TURN", "SEEK_LINE"):
+            target = 0.0
+        elif self.mission_state == "SLOW":
+            target = self.slow_speed
         else:
-            # Fallback berbasis waktu bila /odom belum tersedia
-            turned = (now - self.turn_started_at) * self.turn_speed
+            target = self.linear_speed
 
-        if turned >= self.turn_angle:
-            self.mission_state = "SEEK_LINE"
-            self.seek_start_yaw = self.current_yaw
-            self.seek_started_at = now
-            self.reacquire_count = 0
-            self.cmd_vel_pub.publish(Twist())
-            self._publish_status("SEEKING_LINE", force=True)
-            return
-
-        twist = Twist()
-        twist.angular.z = self.turn_direction * self.turn_speed
-        self.cmd_vel_pub.publish(twist)
-        self._publish_status(
-            "TURNING_LEFT" if self.turn_direction > 0 else "TURNING_RIGHT"
-        )
-
-    def _seek_line(self, line_found: bool, normalized_error: float):
-        """Cari garis cabang baru setelah putaran, lalu kembali ke FOLLOW."""
-        now = time.monotonic()
-        if line_found and abs(normalized_error) <= self.reacquire_error_threshold:
-            self.reacquire_count += 1
-        else:
-            self.reacquire_count = 0
-
-        if self.reacquire_count >= self.reacquire_frames:
-            self.mission_state = "FOLLOW"
-            self.turn_start_yaw = None
-            self.seek_start_yaw = None
-            self.reacquire_count = 0
-            self.current_linear_speed = 0.0
-            self.pid.reset()
-            self.cmd_vel_pub.publish(Twist())
-            self._publish_status("TURN_COMPLETE", force=True)
-            return
-
-        if self.seek_started_at is None:
-            self.seek_started_at = now
-
-        if self.odom_received:
-            searched = abs(self._angle_distance(self.current_yaw, self.seek_start_yaw))
-        else:
-            searched = (now - self.seek_started_at) * self.turn_speed * 0.45
-
-        if searched >= self.reacquire_search_angle:
-            self._fail_turn("Garis cabang tidak ditemukan setelah belok")
-            return
-
-        twist = Twist()
-        twist.angular.z = self.turn_direction * self.turn_speed * 0.45
-        self.cmd_vel_pub.publish(twist)
-        self._publish_status("SEEKING_LINE")
+        max_delta = self.max_acceleration * dt
+        if self.current_linear_speed < target:
+            self.current_linear_speed = min(
+                target, self.current_linear_speed + max_delta
+            )
+        elif self.current_linear_speed > target:
+            self.current_linear_speed = max(
+                target, self.current_linear_speed - max_delta
+            )
 
     def _fail_turn(self, reason: str):
         self.get_logger().error(reason)
         self.mission_state = "STOP"
         self.current_linear_speed = 0.0
-        self.turn_start_yaw = None
-        self.seek_start_yaw = None
+        self.turn_ctrl.reset()
         self.cmd_vel_pub.publish(Twist())
         self._publish_status("TURN_FAILED", force=True)
 
     def _publish_debug(self, debug_img):
-        if debug_img is None or self.debug_pub.get_subscription_count() == 0:
-            return
-        now = time.monotonic()
-        if (
-            self.debug_publish_rate <= 0.0
-            or now - self.last_debug_publish_time < 1.0 / self.debug_publish_rate
-        ):
-            return
         try:
             self.debug_pub.publish(
                 self.bridge.cv2_to_imgmsg(debug_img, encoding="bgr8")
             )
-            self.last_debug_publish_time = now
+            self.last_debug_publish_time = time.monotonic()
         except Exception:
             pass
 
     def _publish_status(self, status: str, force: bool = False):
         now = time.monotonic()
-        # Deduplikasi + heartbeat 0.5 s agar status tidak hilang bila subscriber telat
         if force or status != self.last_status or now - self.last_status_time >= 0.5:
             self.status_pub.publish(String(data=status))
             self.last_status = status
             self.last_status_time = now
-
-    @staticmethod
-    def _angle_distance(angle: float, reference: float) -> float:
-        return math.atan2(math.sin(angle - reference), math.cos(angle - reference))
 
     def destroy_node(self):
         self.cmd_vel_pub.publish(Twist())
